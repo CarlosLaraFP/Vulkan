@@ -7,9 +7,20 @@
 #include <vector>
 #include <algorithm> //std::find_if; C++20 has the more concise std::ranges::find in <ranges>
 #include <sstream> // std::ostringstream; C++20 has std::format in <format>
+#include <cstring> // strcmp compares two strings character by character. If the strings are equal, the function returns 0.
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
+
+// All of the useful standard validation is bundled into a layer included in the SDK:
+const std::vector<const char*> validationLayers = { "VK_LAYER_KHRONOS_validation" };
+
+// The NDEBUG macro is part of the C++ standard and means "not debug"
+#ifdef NDEBUG
+    const bool enableValidationLayers = false;
+#else
+    const bool enableValidationLayers = true;
+#endif
 
 // A lot of information in Vulkan is passed through structs instead of function parameters.
 class HelloTriangleApplication 
@@ -89,8 +100,38 @@ private:
                 throw std::runtime_error(output.str());
             }
         }
+    }
 
-        // check if all of the extensions returned by glfwGetRequiredInstanceExtensions are included in the supported extensions list
+    bool checkValidationLayerSupport()
+    {
+        uint32_t layerCount;
+        vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+
+        std::vector<VkLayerProperties> availableLayers { layerCount };
+        vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
+
+        for (const char* layerName : validationLayers) 
+        {
+            bool layerFound = false;
+
+            for (const auto& layerProperties : availableLayers) 
+            {
+                //std::cout << layerProperties.layerName << std::endl;
+
+                if (strcmp(layerName, layerProperties.layerName) == 0) 
+                {
+                    layerFound = true;
+                    break;
+                }
+            }
+            
+            if (!layerFound) 
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /*
@@ -99,6 +140,11 @@ private:
     */
     void createInstance()
     {
+        if (enableValidationLayers && !checkValidationLayerSupport())
+        {
+            throw std::runtime_error("Validation layers requested, but not available.");
+        }
+
         /*
             This data is technically optional, but it may provide some useful information to the driver in order to optimize 
             your specific application (e.g. because it uses a well-known graphics engine with certain special behavior).
@@ -126,6 +172,13 @@ private:
 
         glfwRequiredExtensions = { glfwExtensions, glfwExtensions + sizeof(glfwExtensions) / sizeof(char*) };
 
+        /*
+            Per the vkCreateInstance documentation, one of the possible error codes is VK_ERROR_EXTENSION_NOT_PRESENT.
+            We could simply specify the extensions we require and terminate if that error code comes back.
+            That makes sense for essential extensions like the window system interface, but what if we want to check for optional functionality?
+        */
+        checkVulkanExtensions();
+
         VkInstanceCreateInfo createInfo {};
          
         createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
@@ -138,14 +191,6 @@ private:
         createInfo.ppEnabledExtensionNames = glfwExtensions;
         // The last two members determine the global validation layers to enable.
         createInfo.enabledLayerCount = 0;
-
-        /*
-            If you look at the vkCreateInstance documentation then you’ll see that one of the possible error codes is 
-            VK_ERROR_EXTENSION_NOT_PRESENT. We could simply specify the extensions we require and terminate if that 
-            error code comes back. That makes sense for essential extensions like the window system interface, 
-            but what if we want to check for optional functionality?
-        */
-        checkVulkanExtensions();
 
         /*
             This is the general pattern followed by object creation function parameters in Vulkan:
@@ -178,6 +223,7 @@ private:
 
     void cleanup() 
     {
+        vkDestroyInstance(instance, nullptr);
         glfwDestroyWindow(window);
         glfwTerminate();
     }
