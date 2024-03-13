@@ -281,15 +281,36 @@ private:
         */
         createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         createInfo.ppEnabledExtensionNames = extensions.data();
-        // The last two members determine the global validation layers to enable (for debug mode).
+
+        /* 
+            The last members determine the global validation layers to enable(for debug mode).
+
+            The vkCreateDebugUtilsMessengerEXT call requires a valid VkInstance to have been created 
+            and vkDestroyDebugUtilsMessengerEXT must be called before the VkInstance is destroyed. 
+            This leaves us unable to debug any issues in the vkCreateInstance and vkDestroyInstance calls.
+            However, per the extension documentation, there is a way to create a separate debug utils messenger 
+            specifically for these two function calls. It requires us to pass a pointer to a 
+            VkDebugUtilsMessengerCreateInfoEXT struct in the pNext extension field of VkInstanceCreateInfo.
+
+            The debugCreateInfo variable is placed outside the if statement to ensure that it is not destroyed 
+            before the vkCreateInstance call. By creating an additional debug messenger this way it will 
+            automatically be used during vkCreateInstance and vkDestroyInstance and cleaned up after that.
+        */
+        VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo {};
+
         if (enableValidationLayers) 
         {
             createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
             createInfo.ppEnabledLayerNames = validationLayers.data();
+
+            populateDebugMessengerCreateInfo(debugCreateInfo);
+
+            createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*)&debugCreateInfo;
         }
         else 
         {
             createInfo.enabledLayerCount = 0;
+            createInfo.pNext = nullptr;
         }
 
         /*
@@ -311,6 +332,17 @@ private:
     void initVulkan() 
     {
         createInstance();
+        setupDebugMessenger();
+    }
+
+    void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) 
+    {
+        createInfo = {};
+        createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        createInfo.pfnUserCallback = debugCallback; // pointer to the callback function
+        createInfo.pUserData = nullptr; // Optional, such as a pointer to the HelloTriangleApplication class
     }
 
     void setupDebugMessenger()
@@ -318,13 +350,9 @@ private:
         if (!enableValidationLayers) return;
 
         // Fill in a struct with details about the messenger and its callback.
-        VkDebugUtilsMessengerCreateInfoEXT createInfo {};
+        VkDebugUtilsMessengerCreateInfoEXT createInfo;
 
-        createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-        createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-        createInfo.pfnUserCallback = debugCallback; // pointer to the callback function
-        createInfo.pUserData = nullptr; // Optional, such as a pointer to the HelloTriangleApplication class
+        populateDebugMessengerCreateInfo(createInfo);
 
         /*
             Since the debug messenger is specific to our Vulkan instance and its layers, it needs to be explicitly specified as first argument. 
