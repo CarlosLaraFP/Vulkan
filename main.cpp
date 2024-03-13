@@ -4,6 +4,9 @@
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib> // provides the EXIT_SUCCESS and EXIT_FAILURE macros
+#include <vector>
+#include <algorithm> //std::find_if; C++20 has the more concise std::ranges::find in <ranges>
+#include <sstream> // std::ostringstream; C++20 has std::format in <format>
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -22,6 +25,7 @@ public:
 
 private:
     GLFWwindow* window = nullptr;
+    std::vector<std::string> glfwRequiredExtensions;
     VkInstance instance;
 
     void initWindow() 
@@ -45,6 +49,48 @@ private:
 
             throw std::runtime_error("Window could not be created.");
         }
+    }
+
+    void checkVulkanExtensions()
+    {
+        // 1. To allocate an array to hold the extension details, we first need to know how many there are:
+        uint32_t extensionCount = 0;
+        vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
+
+        // 2. Allocate an array to hold the extension details. Each VkExtensionProperties struct contains the name and version of an extension.
+        std::vector<VkExtensionProperties> extensions { extensionCount };
+
+        // 3. Query the extension details:
+        vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
+
+        std::cout << "Available Vulkan extensions:" << std::endl;
+
+        for (const auto& extension : extensions) 
+        {
+            std::cout << '\t' << extension.extensionName << std::endl;
+        }
+
+        for (const auto& glfwExtension : glfwRequiredExtensions)
+        {
+            auto iterator = std::find_if(
+                extensions.begin(), 
+                extensions.end(), 
+                [&glfwExtension](const VkExtensionProperties& vkExtension) 
+                {
+                    return vkExtension.extensionName == glfwExtension;
+                }
+            );
+
+            if (iterator == extensions.end())
+            {
+                std::ostringstream output;
+                output << "GLFW extension " << glfwExtension << " is not supported by Vulkan.";
+
+                throw std::runtime_error(output.str());
+            }
+        }
+
+        // check if all of the extensions returned by glfwGetRequiredInstanceExtensions are included in the supported extensions list
     }
 
     /*
@@ -71,10 +117,17 @@ private:
             Global here means that they apply to the entire program and not a specific device.
         */
         uint32_t glfwExtensionCount = 0;
+        /*
+            Returns an array of names of Vulkan instance extensions required by GLFW for creating Vulkan surfaces for GLFW windows.
+            If successful, the list will always contain VK_KHR_surface, so if you don't require any
+            additional extensions you can pass this list directly to the VkInstanceCreateInfo struct.
+        */
         const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
 
-        VkInstanceCreateInfo createInfo {};
+        glfwRequiredExtensions = { glfwExtensions, glfwExtensions + sizeof(glfwExtensions) / sizeof(char*) };
 
+        VkInstanceCreateInfo createInfo {};
+         
         createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         createInfo.pApplicationInfo = &appInfo;
         /*
@@ -83,7 +136,16 @@ private:
         */
         createInfo.enabledExtensionCount = glfwExtensionCount;
         createInfo.ppEnabledExtensionNames = glfwExtensions;
+        // The last two members determine the global validation layers to enable.
         createInfo.enabledLayerCount = 0;
+
+        /*
+            If you look at the vkCreateInstance documentation then you’ll see that one of the possible error codes is 
+            VK_ERROR_EXTENSION_NOT_PRESENT. We could simply specify the extensions we require and terminate if that 
+            error code comes back. That makes sense for essential extensions like the window system interface, 
+            but what if we want to check for optional functionality?
+        */
+        checkVulkanExtensions();
 
         /*
             This is the general pattern followed by object creation function parameters in Vulkan:
@@ -137,6 +199,22 @@ int main()
 
     return EXIT_SUCCESS;
 }
+
+/*
+    Object/Model Space: Coordinates are defined relative to the local origin of the geometric object. This is where vertices of a model typically start.
+
+    World Space: After applying the model transformation, coordinates are in a common space shared by all objects in the scene.
+
+    View/Camera Space: Applying the view transformation positions objects relative to the camera's viewpoint.
+
+    Clip Space: After the projection transformation, coordinates are in a space where they can be clipped against the view frustum. Vertices are then perspective-divided to go from clip space to NDC.
+
+    NDC (Normalized Device Coordinates): In this space, the x, y, and z coordinates are normalized to be within a standard cubic volume (in Vulkan, x and y range from -1.0 to 1.0, and z from 0.0 to 1.0 for the default depth range). This space is what the viewport transformation uses to map to framebuffer coordinates.
+
+    Framebuffer/Window Space: Finally, the viewport transformation maps NDC to the actual pixels in the framebuffer or the window surface being rendered to.
+
+    NDC is a crucial step in the pipeline that standardizes how geometry is represented before it’s mapped onto the screen or the target framebuffer, ensuring consistent rendering across different hardware and graphics APIs.
+*/
 
 /*
 #define GLFW_INCLUDE_VULKAN
