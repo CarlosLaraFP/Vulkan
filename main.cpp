@@ -22,6 +22,81 @@ const std::vector<const char*> validationLayers = { "VK_LAYER_KHRONOS_validation
     const bool enableValidationLayers = true;
 #endif
 
+/*
+    VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT: Diagnostic message
+    VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT: Informational message like the creation of a resource
+    VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT: Message about behavior that is not necessarily an error, but very likely a bug in your application
+    VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT: Message about behavior that is invalid and may cause crashes
+
+    The values of this enumeration are set up in such a way that you can use a comparison operation to check 
+    if a message is equal or worse compared to some level of severity, for example:
+
+    if (messageSeverity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) 
+    {
+        // Message is important enough to show
+    }
+
+    The messageType parameter can have the following values:
+
+    VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT: Some event has happened that is unrelated to the specification or performance
+    VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT: Something has happened that violates the specification or indicates a possible mistake
+    VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT: Potential non-optimal use of Vulkan
+*/
+static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT messageType,
+    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+    void* pUserData // specified during the setup of the callback and allows you to pass your own data to it
+) {
+    std::cerr << "Validation Layer: " << pCallbackData->pMessage << std::endl;
+
+    /*
+        The callback returns a boolean that indicates if the Vulkan call that triggered the validation layer message should be aborted. 
+        If the callback returns true, then the call is aborted with the VK_ERROR_VALIDATION_FAILED_EXT error. 
+        This is normally only used to test the validation layers themselves, so you should always return VK_FALSE.
+    */
+    return VK_FALSE;
+}
+
+/*
+    Because this function is an extension function, it is not automatically loaded. 
+    We have to look up its address ourselves using vkGetInstanceProcAddr via a proxy function that handles this in the background.
+*/
+static VkResult CreateDebugUtilsMessengerEXT(
+    VkInstance instance, 
+    const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo, 
+    const VkAllocationCallbacks* pAllocator, 
+    VkDebugUtilsMessengerEXT* pDebugMessenger
+) {
+    auto func = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT");
+
+    if (func != nullptr) 
+    {
+        return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
+    }
+    else 
+    {
+        return VK_ERROR_EXTENSION_NOT_PRESENT;
+    }
+}
+
+/*
+    The VkDebugUtilsMessengerEXT object also needs to be cleaned up with a call to vkDestroyDebugUtilsMessengerEXT. 
+    Similarly to vkCreateDebugUtilsMessengerEXT the function needs to be explicitly loaded
+*/
+static void DestroyDebugUtilsMessengerEXT(
+    VkInstance instance, 
+    VkDebugUtilsMessengerEXT debugMessenger, 
+    const VkAllocationCallbacks* pAllocator
+) {
+    auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT");
+
+    if (func != nullptr) 
+    {
+        func(instance, debugMessenger, pAllocator);
+    }
+}
+
 // A lot of information in Vulkan is passed through structs instead of function parameters.
 class HelloTriangleApplication 
 {
@@ -37,6 +112,7 @@ public:
 private:
     GLFWwindow* window = nullptr;
     VkInstance instance;
+    VkDebugUtilsMessengerEXT debugMessenger; // The debug callback is managed with a handle that needs to be explicitly created and destroyed.
 
     void initWindow() 
     {
@@ -237,6 +313,29 @@ private:
         createInstance();
     }
 
+    void setupDebugMessenger()
+    {
+        if (!enableValidationLayers) return;
+
+        // Fill in a struct with details about the messenger and its callback.
+        VkDebugUtilsMessengerCreateInfoEXT createInfo {};
+
+        createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        createInfo.pfnUserCallback = debugCallback; // pointer to the callback function
+        createInfo.pUserData = nullptr; // Optional, such as a pointer to the HelloTriangleApplication class
+
+        /*
+            Since the debug messenger is specific to our Vulkan instance and its layers, it needs to be explicitly specified as first argument. 
+            You will also see this pattern with other child objects later on.
+        */
+        if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS) 
+        {
+            throw std::runtime_error("Failed to set up debug messenger.");
+        }
+    }
+
     void mainLoop() 
     {
         while (!glfwWindowShouldClose(window))
@@ -247,6 +346,10 @@ private:
 
     void cleanup() 
     {
+        if (enableValidationLayers) 
+        {
+            DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
+        }
         vkDestroyInstance(instance, nullptr);
         glfwDestroyWindow(window);
         glfwTerminate();
