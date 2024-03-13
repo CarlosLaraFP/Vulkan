@@ -36,7 +36,6 @@ public:
 
 private:
     GLFWwindow* window = nullptr;
-    std::vector<std::string> glfwRequiredExtensions;
     VkInstance instance;
 
     void initWindow() 
@@ -62,40 +61,63 @@ private:
         }
     }
 
-    void checkVulkanExtensions()
+    std::vector<const char*> getRequiredExtensions()
+    {
+        uint32_t glfwExtensionCount = 0;
+        /*
+            Returns an array of names of Vulkan instance extensions required by GLFW for creating Vulkan surfaces for GLFW windows.
+            If successful, the list will always contain VK_KHR_surface, so if you don't require any
+            additional extensions you can pass this list directly to the VkInstanceCreateInfo struct.
+        */
+        const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+
+        std::vector<const char*> requiredExtensions { glfwExtensions, glfwExtensions + glfwExtensionCount };
+
+        // The extensions specified by GLFW are always required, but the debug messenger extension is conditionally added.
+        if (enableValidationLayers)
+        {
+            requiredExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME); // Using this macro rather than the literal helps avoid typos.
+        }
+
+        return requiredExtensions;
+    }
+
+    void checkVulkanExtensions(const std::vector<const char*>& requiredExtensions)
     {
         // 1. To allocate an array to hold the extension details, we first need to know how many there are:
         uint32_t extensionCount = 0;
         vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
 
         // 2. Allocate an array to hold the extension details. Each VkExtensionProperties struct contains the name and version of an extension.
-        std::vector<VkExtensionProperties> extensions { extensionCount };
+        std::vector<VkExtensionProperties> vkExtensions{ extensionCount };
 
         // 3. Query the extension details:
-        vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
+        vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, vkExtensions.data());
 
         std::cout << "Available Vulkan extensions:" << std::endl;
 
-        for (const auto& extension : extensions) 
+        for (const auto& vkExtension : vkExtensions) 
         {
-            std::cout << '\t' << extension.extensionName << std::endl;
+            std::cout << '\t' << vkExtension.extensionName << std::endl;
         }
 
-        for (const auto& glfwExtension : glfwRequiredExtensions)
+        for (const auto& extension : requiredExtensions)
         {
             auto iterator = std::find_if(
-                extensions.begin(), 
-                extensions.end(), 
-                [&glfwExtension](const VkExtensionProperties& vkExtension) 
+                vkExtensions.begin(),
+                vkExtensions.end(),
+                [&extension](const VkExtensionProperties& vkExtension) 
                 {
-                    return vkExtension.extensionName == glfwExtension;
+                    // strcmp needed for C-style string comparison
+                    return strcmp(vkExtension.extensionName, extension) == 0;
+                    //return vkExtension.extensionName == extension;
                 }
             );
 
-            if (iterator == extensions.end())
+            if (iterator == vkExtensions.end())
             {
                 std::ostringstream output;
-                output << "GLFW extension " << glfwExtension << " is not supported by Vulkan.";
+                output << "Required extension " << extension << " is not supported by Vulkan.";
 
                 throw std::runtime_error(output.str());
             }
@@ -110,13 +132,15 @@ private:
         std::vector<VkLayerProperties> availableLayers { layerCount };
         vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
 
+        std::cout << "Validation Layers supported by Vulkan:" << std::endl;
+
         for (const char* layerName : validationLayers) 
         {
             bool layerFound = false;
 
             for (const auto& layerProperties : availableLayers) 
             {
-                //std::cout << layerProperties.layerName << std::endl;
+                std::cout << '\t' << layerProperties.layerName << std::endl;
 
                 if (strcmp(layerName, layerProperties.layerName) == 0) 
                 {
@@ -162,22 +186,14 @@ private:
             This is not optional and tells the Vulkan driver which global extensions and validation layers we want to use. 
             Global here means that they apply to the entire program and not a specific device.
         */
-        uint32_t glfwExtensionCount = 0;
-        /*
-            Returns an array of names of Vulkan instance extensions required by GLFW for creating Vulkan surfaces for GLFW windows.
-            If successful, the list will always contain VK_KHR_surface, so if you don't require any
-            additional extensions you can pass this list directly to the VkInstanceCreateInfo struct.
-        */
-        const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-        glfwRequiredExtensions = { glfwExtensions, glfwExtensions + sizeof(glfwExtensions) / sizeof(char*) };
+        auto extensions = getRequiredExtensions();
 
         /*
             Per the vkCreateInstance documentation, one of the possible error codes is VK_ERROR_EXTENSION_NOT_PRESENT.
             We could simply specify the extensions we require and terminate if that error code comes back.
             That makes sense for essential extensions like the window system interface, but what if we want to check for optional functionality?
         */
-        checkVulkanExtensions();
+        checkVulkanExtensions(extensions);
 
         VkInstanceCreateInfo createInfo {};
          
@@ -187,10 +203,18 @@ private:
             Specify the desired global extensions; since Vulkan is a platform agnostic API, we need an extension to interface with the window 
             system. GLFW has a handy built-in function that returns the extension(s) it needs to do that - which we can pass to the struct.
         */
-        createInfo.enabledExtensionCount = glfwExtensionCount;
-        createInfo.ppEnabledExtensionNames = glfwExtensions;
-        // The last two members determine the global validation layers to enable.
-        createInfo.enabledLayerCount = 0;
+        createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+        createInfo.ppEnabledExtensionNames = extensions.data();
+        // The last two members determine the global validation layers to enable (for debug mode).
+        if (enableValidationLayers) 
+        {
+            createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
+            createInfo.ppEnabledLayerNames = validationLayers.data();
+        }
+        else 
+        {
+            createInfo.enabledLayerCount = 0;
+        }
 
         /*
             This is the general pattern followed by object creation function parameters in Vulkan:
@@ -260,45 +284,4 @@ int main()
     Framebuffer/Window Space: Finally, the viewport transformation maps NDC to the actual pixels in the framebuffer or the window surface being rendered to.
 
     NDC is a crucial step in the pipeline that standardizes how geometry is represented before it’s mapped onto the screen or the target framebuffer, ensuring consistent rendering across different hardware and graphics APIs.
-*/
-
-/*
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#include <glm/vec4.hpp>
-#include <glm/mat4x4.hpp>
-
-#include <iostream>
-
-
-int main() 
-{
-    glfwInit();
-
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    GLFWwindow* window = glfwCreateWindow(800, 600, "Vulkan window", nullptr, nullptr);
-
-    uint32_t extensionCount = 0;
-    vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
-
-    std::cout << extensionCount << " extensions supported\n";
-
-    glm::mat4 matrix;
-    glm::vec4 vec;
-    auto test = matrix * vec;
-
-    while (!glfwWindowShouldClose(window)) 
-    {
-        glfwPollEvents();
-    }
-
-    glfwDestroyWindow(window);
-
-    glfwTerminate();
-
-    return 0;
-}
 */
