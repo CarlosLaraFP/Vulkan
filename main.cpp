@@ -8,6 +8,7 @@
 #include <algorithm> //std::find_if; C++20 has the more concise std::ranges::find in <ranges>
 #include <sstream> // std::ostringstream; C++20 has std::format in <format>
 #include <cstring> // strcmp compares two strings character by character. If the strings are equal, the function returns 0.
+#include <optional> // C++17
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -59,6 +60,46 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
 }
 
 /*
+    Extensions in Vulkan, such as VkDebugUtilsMessengerEXT, play a critical role in extending the core functionality of Vulkan. Vulkan is designed to be a lean and efficient graphics and compute API, offering minimal features in its core specification to cover a wide range of hardware. Extensions allow developers to access additional features and tools that are not part of the core specification, enabling them to use new hardware capabilities, debugging tools, and other functionalities that may be vendor-specific or not universally needed.
+
+    Understanding 
+
+    The VkDebugUtilsMessengerEXT extension is a part of the Vulkan API that provides a way to receive callbacks from the Vulkan driver for various events, such as errors, warnings, and performance issues. It is extremely useful during development for debugging and validating applications' Vulkan usage.
+
+    Why Extensions Need to be Loaded Dynamically
+
+    Extensions like VkDebugUtilsMessengerEXT need to be loaded dynamically for several reasons:
+
+    Version and Vendor Independence: Vulkan aims to be a cross-platform API, supporting a wide range of hardware and software environments. Extensions can be vendor-specific or only available in certain versions of a driver or operating system. Dynamically loading extensions allows applications to query and use these features only when they are available, making the application more portable and robust.
+
+    Avoiding Bloat: Including all possible extensions and their functionalities directly in the Vulkan library would significantly increase its size and complexity. By requiring explicit loading of extensions, Vulkan keeps the core library lean and efficient. Developers only use and load what is necessary for their application.
+
+    Forward Compatibility: Dynamically loading extensions ensures that applications can run on a wide variety of hardware and software configurations, including future ones. An application can check for the presence of an extension and adapt its behavior accordingly, whether the extension is available or not.
+
+    How Extensions are Loaded
+
+    The methods below for loading/destroying the VkDebugUtilsMessengerEXT extension is a common pattern for working with Vulkan extensions:
+
+    vkGetInstanceProcAddr: This function retrieves the address of the extension function from the Vulkan loader or driver. By passing the instance and the name of the function, it returns a function pointer (PFN_vkCreateDebugUtilsMessengerEXT in this case) that can be cast to the appropriate type.
+
+    Function Pointer Call: If the function pointer is not nullptr, the extension is present, and the application can call the function to use the extension's features. Otherwise, it indicates that the extension is not available (VK_ERROR_EXTENSION_NOT_PRESENT), and the application can handle this situation, usually by disabling the functionality associated with the extension or falling back to a different implementation.
+
+    This dynamic loading mechanism allows Vulkan applications to be both forward-compatible and adaptable to the wide range of hardware and software environments where they might run.
+
+    Vulkan extensions can be thought of as additional features or functionalities that are not part of the Vulkan core specification. They can be provided by various sources:
+
+    GPU Vendors (Hardware): Many Vulkan extensions are specific to hardware from certain GPU vendors, such as NVIDIA, AMD, or Intel. These extensions allow developers to take advantage of unique features and capabilities of these vendors' GPUs. For example, an extension might expose a new rendering technique or optimization that is only possible on a particular vendor's hardware.
+
+    Khronos Group (Vulkan's Governing Body): Some extensions are standardized by the Khronos Group, the consortium behind Vulkan. These extensions may add features that are useful across a wide range of hardware but were not included in the core Vulkan specification for various reasons, possibly including the need for further experimentation or because they were developed after the core specification was finalized.
+
+    Platform-Specific: There are also extensions that are specific to certain operating systems or platforms. These extensions allow Vulkan applications to better integrate with the underlying system, offering functionalities like better window system integration or specific optimizations for a given platform.
+
+    When an extension is available on your machine, it means that the combination of your GPU hardware, its driver, and possibly the operating system supports this extension. The Vulkan driver for your GPU implements these extensions to expose additional features beyond what is available in the Vulkan core. This is why not all extensions are available on all devices; their availability can depend on the hardware capability of the GPU, the driver version installed, and sometimes the operating system version.
+
+    The process of dynamically querying and loading extensions, as described earlier, allows a Vulkan application to check at runtime which extensions are available on the user's machine and adapt its behavior accordingly. This ensures that the application can take advantage of these extended features when available, while still being able to run on systems where those features are not supported.
+*/
+
+/*
     Because this function is an extension function, it is not automatically loaded. 
     We have to look up its address ourselves using vkGetInstanceProcAddr via a proxy function that handles this in the background.
 */
@@ -97,6 +138,16 @@ static void DestroyDebugUtilsMessengerEXT(
     }
 }
 
+struct QueueFamilyIndices
+{
+    std::optional<uint32_t> graphicsFamily;
+
+    bool isComplete() const
+    {
+        return graphicsFamily.has_value();
+    }
+};
+
 // A lot of information in Vulkan is passed through structs instead of function parameters.
 class HelloTriangleApplication 
 {
@@ -113,6 +164,7 @@ private:
     GLFWwindow* window = nullptr;
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger; // The debug callback is managed with a handle that needs to be explicitly created and destroyed.
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE; // Implicitly destroyed when the VkInstance is destroyed.
 
     void initWindow() 
     {
@@ -329,10 +381,108 @@ private:
         }
     }
 
+    QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device)
+    {
+        QueueFamilyIndices indices;
+
+        uint32_t queueFamilyCount;
+        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
+
+        std::vector<VkQueueFamilyProperties> queueFamilies { queueFamilyCount };
+        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
+
+        /*
+            The VkQueueFamilyProperties struct contains some details about the queue family, including 
+            the type of operations that are supported and the number of queues that can be created based 
+            on that family. We need to find at least one queue family that supports VK_QUEUE_GRAPHICS_BIT.
+        */
+
+        int i = 0;
+
+        for (const auto& queueFamily : queueFamilies)
+        {
+            // bitwise AND operation between the queueFlags bitmask and the VK_QUEUE_GRAPHICS_BIT constant
+            if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT)
+            {
+                indices.graphicsFamily = i;
+            }
+
+            if (indices.isComplete())
+            {
+                break;
+            }
+
+            i++;
+        }
+
+        return indices;
+    }
+
+    /*
+        We need to evaluate each GPU and check if they are suitable for the operations we want to perform, 
+        because not all graphics cards are created equal.
+    */
+    bool isDeviceSuitable(VkPhysicalDevice device)
+    {
+        // Basic device properties like the name, type, and supported Vulkan version can be queried using vkGetPhysicalDeviceProperties:
+        VkPhysicalDeviceProperties deviceProperties;
+        vkGetPhysicalDeviceProperties(device, &deviceProperties);
+
+        /*
+            The support for optional features like texture compression, 64 bit floats and 
+            multi viewport rendering (useful for VR) can be queried using vkGetPhysicalDeviceFeatures:
+        */
+        VkPhysicalDeviceFeatures deviceFeatures;
+        vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
+
+        auto vr = deviceFeatures.multiViewport ? "VR supported" : "VR unsupported";
+
+        std::cout << vr << std::endl;
+
+        QueueFamilyIndices indices = findQueueFamilies(device);
+        
+        return indices.isComplete();
+    }
+
+    /*
+        Instead of just checking if a device is suitable or not and going with the first one, you could also give each 
+        device a score and pick the highest one. That way you could favor a dedicated graphics card by giving it a 
+        higher score, but fall back to an integrated GPU if that’s the only available one.
+    */
+    void selectPhysicalDevice()
+    {
+        uint32_t deviceCount = 0;
+        vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+
+        if (deviceCount == 0) 
+        {
+            throw std::runtime_error("Failed to find GPUs with Vulkan support.");
+        }
+
+        std::vector<VkPhysicalDevice> devices { deviceCount };
+        vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+
+        // We can select any number of graphics cards and use them simultaneously; using only 1 in this tutorial.
+        for (const auto& device : devices)
+        {
+            if (isDeviceSuitable(device))
+            {
+                physicalDevice = device;
+                break;
+            }
+        }
+
+        if (physicalDevice == VK_NULL_HANDLE)
+        {
+            throw std::runtime_error("Failed to find a suitable GPU.");
+        }
+    }
+
     void initVulkan() 
     {
         createInstance();
         setupDebugMessenger();
+        selectPhysicalDevice();
     }
 
     void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) 
