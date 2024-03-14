@@ -165,6 +165,12 @@ private:
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger; // The debug callback is managed with a handle that needs to be explicitly created and destroyed.
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE; // Implicitly destroyed when the VkInstance is destroyed.
+    VkDevice device; // logical device
+    /*
+        The queues are automatically created along with the logical device, but we need a handle to interface with them.
+        Device queues are implicitly cleaned up when the logical device is destroyed.
+    */
+    VkQueue graphicsQueue;
 
     void initWindow() 
     {
@@ -429,9 +435,17 @@ private:
         vkGetPhysicalDeviceProperties(device, &deviceProperties);
 
         /*
-            The support for optional features like texture compression, 64 bit floats and 
-            multi viewport rendering (useful for VR) can be queried using vkGetPhysicalDeviceFeatures:
+            typedef enum VkPhysicalDeviceType {
+                VK_PHYSICAL_DEVICE_TYPE_OTHER = 0,
+                VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU = 1,
+                VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU = 2,
+                VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU = 3,
+                VK_PHYSICAL_DEVICE_TYPE_CPU = 4,
+            } VkPhysicalDeviceType;
         */
+        std::cout << deviceProperties.deviceName << " | " << deviceProperties.deviceType << std::endl;
+
+        // Querying support for optional features like texture compression, 64 bit floats, multi viewport rendering (useful for VR), etc.
         VkPhysicalDeviceFeatures deviceFeatures;
         vkGetPhysicalDeviceFeatures(device, &deviceFeatures);
 
@@ -439,9 +453,12 @@ private:
 
         std::cout << vr << std::endl;
 
+        // All we need here is a queue family that supports graphics operations.
+
         QueueFamilyIndices indices = findQueueFamilies(device);
         
-        return indices.isComplete();
+        // Discrete GPUs have a significant performance advantage.
+        return indices.isComplete() && deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
     }
 
     /*
@@ -462,6 +479,8 @@ private:
         std::vector<VkPhysicalDevice> devices { deviceCount };
         vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
 
+        std::cout << "Found " << deviceCount << " GPU(s) with Vulkan support." << std::endl;
+
         // We can select any number of graphics cards and use them simultaneously; using only 1 in this tutorial.
         for (const auto& device : devices)
         {
@@ -478,11 +497,76 @@ private:
         }
     }
 
+    void createLogicalDevice()
+    {
+        QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+
+        VkDeviceQueueCreateInfo queueCreateInfo {};
+
+        queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        // only interested in graphics capabilities for now
+        queueCreateInfo.queueFamilyIndex = indices.graphicsFamily.value();
+        /*
+            We don’t really need more than one queue per family because we can create all of the command buffers
+            on multiple threads and then submit them all at once on the main thread with a single low-overhead call.
+        */
+        queueCreateInfo.queueCount = 1;
+        /*
+            Vulkan lets us assign priorities to queues to influence the scheduling of command buffer execution 
+            using floating point numbers between 0.0 and 1.0. This is required even if there is only a single queue:
+        */
+        float queuePriority = 1.0f;
+        queueCreateInfo.pQueuePriorities = &queuePriority;
+
+        VkPhysicalDeviceFeatures deviceFeatures {}; // nothing special for now
+
+        VkDeviceCreateInfo createInfo {};
+
+        createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        createInfo.pQueueCreateInfos = &queueCreateInfo;
+        createInfo.queueCreateInfoCount = 1;
+        createInfo.pEnabledFeatures = &deviceFeatures;
+
+        /* 
+            The remainder of the information is similar to the VkInstanceCreateInfo struct and requires us to
+            specify extensions and validation layers. The difference is that these are device specific this time.
+            An example of a device specific extension is VK_KHR_swapchain, which allows us to present rendered images 
+            from that device to windows. It is possible that there are Vulkan devices in the system that lack this ability, 
+            for example because they only support compute operations.
+        */
+        createInfo.enabledExtensionCount = 0; // We do not need any device specific extensions for now.
+
+        /*
+            Previous implementations of Vulkan made a distinction between instance and device specific validation layers, but 
+            this is no longer the case. The enabledLayerCount and ppEnabledLayerNames fields of VkDeviceCreateInfo are ignored 
+            by up-to-date implementations. However, it is still a good idea to set them anyway to be compatible with older implementations.
+        */
+        if (enableValidationLayers)
+        {
+            createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
+            createInfo.ppEnabledLayerNames = validationLayers.data();
+        }
+        else
+        {
+            createInfo.enabledLayerCount = 0;
+        }
+
+        // Similarly to the instance creation function, this call can return errors based on enabling 
+        // non-existent extensions or specifying the desired usage of unsupported features.
+        if (vkCreateDevice(physicalDevice, &createInfo, nullptr, &device) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create logical device.");
+        }
+
+        vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+    }
+
     void initVulkan() 
     {
         createInstance();
         setupDebugMessenger();
         selectPhysicalDevice();
+        createLogicalDevice();
     }
 
     void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) 
@@ -524,11 +608,16 @@ private:
 
     void cleanup() 
     {
+        // Logical devices don’t interact directly with instances, which is why instance is not included as a parameter.
+        vkDestroyDevice(device, nullptr);
+
         if (enableValidationLayers) 
         {
             DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
         }
+
         vkDestroyInstance(instance, nullptr);
+
         glfwDestroyWindow(window);
         glfwTerminate();
     }
