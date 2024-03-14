@@ -17,6 +17,15 @@ const uint32_t HEIGHT = 600;
 // All of the useful standard validation is bundled into a layer included in the SDK:
 const std::vector<const char*> validationLayers = { "VK_LAYER_KHRONOS_validation" };
 
+// Required device extensions in addition to instance extensions (GLFW and debug)
+/*
+    Not all graphics cards are capable of presenting images directly to a screen for various reasons, for example because 
+    they are designed for servers and don’t have any display outputs. Secondly, since image presentation is heavily tied 
+    into the window system and the surfaces associated with windows, it is not actually part of the Vulkan core. 
+    You have to enable the VK_KHR_swapchain device extension after querying for its support.
+*/
+const std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME }; // macro helps the compiler catch misspellings
+
 // The NDEBUG macro is part of the C++ standard and means "not debug"
 #ifdef NDEBUG
     const bool enableValidationLayers = false;
@@ -224,6 +233,7 @@ private:
         return requiredExtensions;
     }
 
+    // Instance extensions add new functionalities that are global to the application and not specific to any particular GPU (device).
     void checkVulkanExtensions(const std::vector<const char*>& requiredExtensions)
     {
         // 1. To allocate an array to hold the extension details, we first need to know how many there are:
@@ -459,6 +469,39 @@ private:
     }
 
     /*
+        Device extensions extend the capabilities of a specific physical device (GPU). 
+        Vulkan treats each GPU as a separate device, and device extensions allow you to use 
+        additional features or optimizations offered by that GPU beyond what the core Vulkan specification supports.
+        Another example of a device extension is VK_NV_ray_tracing, which adds support for hardware-accelerated ray tracing on NVIDIA GPUs.
+    */
+    bool checkDeviceExtensionSupport(VkPhysicalDevice device)
+    {
+        uint32_t extensionCount;
+        vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
+
+        std::vector<VkExtensionProperties> availableExtensions { extensionCount };
+        vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, availableExtensions.data());
+
+        std::set<std::string> requiredExtensions(deviceExtensions.begin(), deviceExtensions.end());
+
+        //std::cout << "Available device extensions:" << std::endl;
+
+        for (const auto& extension : availableExtensions)
+        {
+            //std::cout << '\t' << extension.extensionName << std::endl;
+
+            requiredExtensions.erase(extension.extensionName);
+        }
+
+        /*
+            Verify that the graphics card is capable of creating a swap chain. It should be noted that the availability of a
+            presentation queue, as we checked in the previous chapter, implies that the swap chain extension must be supported.
+            However, it’s still good to be explicit about things, and the extension does have to be explicitly enabled.
+        */
+        return requiredExtensions.empty();
+    }
+
+    /*
         We need to evaluate each GPU and check if they are suitable for the operations we want to perform, 
         because not all graphics cards are created equal.
     */
@@ -490,9 +533,11 @@ private:
         // All we need here is a queue family that supports graphics operations.
 
         QueueFamilyIndices indices = findQueueFamilies(device);
+
+        bool extensionsSupported = checkDeviceExtensionSupport(device);
         
         // Discrete GPUs have a significant performance advantage.
-        return indices.isComplete() && deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+        return indices.isComplete() && extensionsSupported && deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
     }
 
     /*
@@ -569,7 +614,6 @@ private:
         createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
         createInfo.pQueueCreateInfos = queueCreateInfos.data();
         createInfo.pEnabledFeatures = &deviceFeatures;
-
         /* 
             The remainder of the information is similar to the VkInstanceCreateInfo struct and requires us to
             specify extensions and validation layers. The difference is that these are device specific this time.
@@ -577,7 +621,8 @@ private:
             from that device to windows. It is possible that there are Vulkan devices in the system that lack this ability, 
             for example because they only support compute operations.
         */
-        createInfo.enabledExtensionCount = 0; // We do not need any device specific extensions for now.
+        createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
+        createInfo.ppEnabledExtensionNames = deviceExtensions.data();
 
         /*
             Previous implementations of Vulkan made a distinction between instance and device specific validation layers, but 
