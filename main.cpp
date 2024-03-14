@@ -9,6 +9,7 @@
 #include <sstream> // std::ostringstream; C++20 has std::format in <format>
 #include <cstring> // strcmp compares two strings character by character. If the strings are equal, the function returns 0.
 #include <optional> // C++17
+#include <set>
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -140,11 +141,16 @@ static void DestroyDebugUtilsMessengerEXT(
 
 struct QueueFamilyIndices
 {
+    /*
+        It’s possible that the queue families supporting drawing commands and the ones supporting presentation do not overlap. 
+        Therefore we have to take into account that there could be a distinct presentation queue.
+    */
     std::optional<uint32_t> graphicsFamily;
+    std::optional<uint32_t> presentFamily;
 
     bool isComplete() const
     {
-        return graphicsFamily.has_value();
+        return graphicsFamily.has_value() && presentFamily.has_value();
     }
 };
 
@@ -164,6 +170,7 @@ private:
     GLFWwindow* window = nullptr;
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger; // The debug callback is managed with a handle that needs to be explicitly created and destroyed.
+    VkSurfaceKHR surface;
     VkPhysicalDevice physicalDevice = VK_NULL_HANDLE; // Implicitly destroyed when the VkInstance is destroyed.
     VkDevice device; // logical device
     /*
@@ -171,6 +178,7 @@ private:
         Device queues are implicitly cleaned up when the logical device is destroyed.
     */
     VkQueue graphicsQueue;
+    VkQueue presentQueue;
 
     void initWindow() 
     {
@@ -235,8 +243,12 @@ private:
             std::cout << '\t' << vkExtension.extensionName << std::endl;
         }
 
+        std::cout << "Required extensions:" << std::endl;
+
         for (const auto& extension : requiredExtensions)
         {
+            std::cout << '\t' << extension << std::endl;
+
             auto iterator = std::find_if(
                 vkExtensions.begin(),
                 vkExtensions.end(),
@@ -387,6 +399,15 @@ private:
         }
     }
 
+    void createSurface()
+    {
+        // Under the hood, GLFW performs platform-specific operations (i.e. vkCreateWin32SurfaceKHR)
+        if (glfwCreateWindowSurface(instance, window, nullptr, &surface) != VK_SUCCESS)
+        {
+            throw std::runtime_error("GLFW failed to create window surface.");
+        }
+    }
+
     QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device)
     {
         QueueFamilyIndices indices;
@@ -408,9 +429,22 @@ private:
         for (const auto& queueFamily : queueFamilies)
         {
             // bitwise AND operation between the queueFlags bitmask and the VK_QUEUE_GRAPHICS_BIT constant
-            if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT)
+            // We could prefer a physical device that supports drawing and presentation in the same queue for improved performance.
+            if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT && !indices.graphicsFamily.has_value())
             {
                 indices.graphicsFamily = i;
+            }
+
+            /*
+                Since the presentation is a queue-specific feature, the problem is actually about finding 
+                a queue family that supports presenting to the surface we created.
+            */
+            VkBool32 presentSupport = false;
+            vkGetPhysicalDeviceSurfaceSupportKHR(device, i, surface, &presentSupport);
+
+            if (presentSupport)
+            {
+                indices.presentFamily = i; // may or may not be the same as the graphics queue family
             }
 
             if (indices.isComplete())
@@ -501,30 +535,39 @@ private:
     {
         QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 
-        VkDeviceQueueCreateInfo queueCreateInfo {};
+        std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+        // Using a set in case it's the same queue family for both capabilities
+        std::set<uint32_t> uniqueQueueFamilies = { indices.graphicsFamily.value(), indices.presentFamily.value() };
 
-        queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-        // only interested in graphics capabilities for now
-        queueCreateInfo.queueFamilyIndex = indices.graphicsFamily.value();
-        /*
-            We don’t really need more than one queue per family because we can create all of the command buffers
-            on multiple threads and then submit them all at once on the main thread with a single low-overhead call.
-        */
-        queueCreateInfo.queueCount = 1;
-        /*
-            Vulkan lets us assign priorities to queues to influence the scheduling of command buffer execution 
-            using floating point numbers between 0.0 and 1.0. This is required even if there is only a single queue:
-        */
         float queuePriority = 1.0f;
-        queueCreateInfo.pQueuePriorities = &queuePriority;
+
+        for (uint32_t queueFamily : uniqueQueueFamilies)
+        {
+            VkDeviceQueueCreateInfo queueCreateInfo {};
+
+            queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+            queueCreateInfo.queueFamilyIndex = queueFamily;
+            /*
+                We don’t really need more than one queue per family because we can create all of the command buffers
+                on multiple threads and then submit them all at once on the main thread with a single low-overhead call.
+            */
+            queueCreateInfo.queueCount = 1;
+            /*
+                Vulkan lets us assign priorities to queues to influence the scheduling of command buffer execution
+                using floating point numbers between 0.0 and 1.0. This is required even if there is only a single queue.
+            */
+            queueCreateInfo.pQueuePriorities = &queuePriority;
+
+            queueCreateInfos.push_back(queueCreateInfo);
+        }
 
         VkPhysicalDeviceFeatures deviceFeatures {}; // nothing special for now
 
         VkDeviceCreateInfo createInfo {};
 
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-        createInfo.pQueueCreateInfos = &queueCreateInfo;
-        createInfo.queueCreateInfoCount = 1;
+        createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
+        createInfo.pQueueCreateInfos = queueCreateInfos.data();
         createInfo.pEnabledFeatures = &deviceFeatures;
 
         /* 
@@ -557,14 +600,18 @@ private:
         {
             throw std::runtime_error("Failed to create logical device.");
         }
-
+        
+        // Queue index 0 for both because each queue family only has a single queue.
+        // In case the queue families are the same, the two handles will most likely have the same value.
         vkGetDeviceQueue(device, indices.graphicsFamily.value(), 0, &graphicsQueue);
+        vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
     }
 
     void initVulkan() 
     {
         createInstance();
         setupDebugMessenger();
+        createSurface();
         selectPhysicalDevice();
         createLogicalDevice();
     }
@@ -616,6 +663,7 @@ private:
             DestroyDebugUtilsMessengerEXT(instance, debugMessenger, nullptr);
         }
 
+        vkDestroySurfaceKHR(instance, surface, nullptr);
         vkDestroyInstance(instance, nullptr);
 
         glfwDestroyWindow(window);
