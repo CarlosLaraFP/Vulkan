@@ -163,6 +163,20 @@ struct QueueFamilyIndices
     }
 };
 
+/*
+    There are basically three kinds of properties we need to check:
+
+    - Basic surface capabilities (min/max number of images in swap chain, min/max width and height of images)
+    - Surface formats (pixel format, color space)
+    - Available presentation modes
+*/
+struct SwapChainSupportDetails
+{
+    VkSurfaceCapabilitiesKHR capabilities;
+    std::vector<VkSurfaceFormatKHR> formats;
+    std::vector<VkPresentModeKHR> presentModes;
+};
+
 // A lot of information in Vulkan is passed through structs instead of function parameters.
 class HelloTriangleApplication 
 {
@@ -468,6 +482,35 @@ private:
         return indices;
     }
 
+    // Just checking if a swap chain is available is not sufficient because it may not be compatible with our window surface.
+    SwapChainSupportDetails querySwapChainSupport(VkPhysicalDevice device)
+    {
+        SwapChainSupportDetails details;
+
+        // All of the support querying functions have these two as first parameters because they are the core components of the swap chain.
+        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &details.capabilities);
+
+        uint32_t formatCount;
+        vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, nullptr);
+
+        if (formatCount > 0)
+        {
+            details.formats.resize(formatCount); // Make sure the vector is resized to hold all the available formats
+            vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &formatCount, details.formats.data());
+        }
+
+        uint32_t presentModeCount;
+        vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, nullptr);
+
+        if (presentModeCount > 0)
+        {
+            details.presentModes.resize(presentModeCount);
+            vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &presentModeCount, details.presentModes.data());
+        }
+
+        return details;
+    }
+
     /*
         Device extensions extend the capabilities of a specific physical device (GPU). 
         Vulkan treats each GPU as a separate device, and device extensions allow you to use 
@@ -530,14 +573,20 @@ private:
 
         std::cout << vr << std::endl;
 
-        // All we need here is a queue family that supports graphics operations.
-
         QueueFamilyIndices indices = findQueueFamilies(device);
 
-        bool extensionsSupported = checkDeviceExtensionSupport(device);
+        bool swapChainAdequate = false; // true implies device extensions are supported
+
+        // Only try to query for swap chain support after verifying that the extension is available.
+        if (checkDeviceExtensionSupport(device))
+        {
+            SwapChainSupportDetails swapChainSupport = querySwapChainSupport(device);
+            // Checks whether the swap chain is compatible with the window surface
+            swapChainAdequate = !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
+        }
         
         // Discrete GPUs have a significant performance advantage.
-        return indices.isComplete() && extensionsSupported && deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+        return indices.isComplete() && swapChainAdequate && deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
     }
 
     /*
