@@ -211,7 +211,8 @@ private:
     VkSwapchainKHR swapChain;
     // Each created by the implementation for the swap chain and will be automatically cleaned up once the swap chain has been destroyed.
     std::vector<VkImage> swapChainImages;
-    VkFormat swapChainImageFormat;
+    std::vector<VkImageView> swapChainImageViews; // describes how to access the image and which part of the image to access
+    VkFormat swapChainImageFormat; // required for VkImageViewCreateInfo
     VkExtent2D swapChainExtent;
 
     void initWindow() 
@@ -936,6 +937,8 @@ private:
             throw std::runtime_error("Failed to create swap chain.");
         }
 
+        // We now have a set of images that can be drawn onto and can be presented to the window.
+
         // We will reference swap chain images during rendering operations later
         vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
         swapChainImages.resize(imageCount);
@@ -943,6 +946,49 @@ private:
         // These will be needed later
         swapChainImageFormat = surfaceFormat.format;
         swapChainExtent = extent;
+    }
+
+    // Creates a basic image view for every image in the swap chain so that we can use them as color targets.
+    void createImageViews()
+    {
+        swapChainImageViews.resize(swapChainImages.size());
+
+        for (size_t i = 0; i < swapChainImages.size(); i++)
+        {
+            VkImageViewCreateInfo createInfo {};
+
+            createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+            createInfo.image = swapChainImages[i];
+            // The viewType and format fields specify how the image data should be interpreted. 
+            // The viewType parameter allows you to treat images as 1D textures, 2D textures, 3D textures and cube maps.
+            createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            createInfo.format = swapChainImageFormat;
+            /*
+                The components field allows US to swizzle the color channels around. 
+                For example, you can map all of the channels to the red channel for a monochrome texture. 
+                We can also map constant values of 0 and 1 to a channel. In our case we’ll stick to the default mapping.
+            */
+            createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+            createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+            createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+            createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+            /*
+                The subresourceRange field describes what is the purpose of the image and which part of the image should be accessed. 
+                Our images will be used as color targets without any mipmapping levels or multiple layers.
+                If we were working on a stereographic 3D application, then we would create a swap chain with multiple layers. We could then 
+                create multiple image views for each image representing the views for the left and right eyes by accessing different layers.
+            */
+            createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            createInfo.subresourceRange.baseMipLevel = 0;
+            createInfo.subresourceRange.levelCount = 1;
+            createInfo.subresourceRange.baseArrayLayer = 0;
+            createInfo.subresourceRange.layerCount = 1;
+
+            if (vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to create image view.");
+            }
+        }
     }
 
     void initVulkan() 
@@ -953,6 +999,7 @@ private:
         selectPhysicalDevice();
         createLogicalDevice();
         createSwapChain();
+        createImageViews();
     }
 
     void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) 
@@ -995,6 +1042,11 @@ private:
     void cleanup() 
     {
         // Note the reverse order of deletions based on dependencies
+
+        for (auto imageView : swapChainImageViews)
+        {
+            vkDestroyImageView(device, imageView, nullptr); // Unlike images, the image views were explicitly.
+        }
         vkDestroySwapchainKHR(device, swapChain, nullptr);
         // Logical devices don’t interact directly with instances, which is why instance is not included as a parameter.
         vkDestroyDevice(device, nullptr);
