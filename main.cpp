@@ -209,6 +209,10 @@ private:
     VkQueue graphicsQueue;
     VkQueue presentQueue;
     VkSwapchainKHR swapChain;
+    // Each created by the implementation for the swap chain and will be automatically cleaned up once the swap chain has been destroyed.
+    std::vector<VkImage> swapChainImages;
+    VkFormat swapChainImageFormat;
+    VkExtent2D swapChainExtent;
 
     void initWindow() 
     {
@@ -931,6 +935,14 @@ private:
         {
             throw std::runtime_error("Failed to create swap chain.");
         }
+
+        // We will reference swap chain images during rendering operations later
+        vkGetSwapchainImagesKHR(device, swapChain, &imageCount, nullptr);
+        swapChainImages.resize(imageCount);
+        vkGetSwapchainImagesKHR(device, swapChain, &imageCount, swapChainImages.data());
+        // These will be needed later
+        swapChainImageFormat = surfaceFormat.format;
+        swapChainExtent = extent;
     }
 
     void initVulkan() 
