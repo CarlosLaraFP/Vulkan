@@ -12,6 +12,7 @@
 #include <set>
 #include <cstdint> // uint32_t
 #include <limits> // std::numeric_limits
+#include <fstream>
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -148,6 +149,31 @@ static void DestroyDebugUtilsMessengerEXT(
     {
         func(instance, debugMessenger, pAllocator);
     }
+}
+
+// Reads all of the bytes from the specified file and returns them in a byte array managed by a vector.
+static std::vector<char> readFile(const std::string& filename)
+{
+    // ate: Start reading at the end of the file
+    // binary: Read the file as a binary file (avoid text transformations)
+    std::ifstream file { filename, std::ios::ate | std::ios::binary };
+
+    if (!file.is_open())
+    {
+        throw std::runtime_error("Failed to open file.");
+    }
+
+    // The advantage of starting to read at the end of the file is that we can use 
+    // the read position to determine the size of the file and allocate a buffer:
+    size_t fileSize = (size_t)file.tellg(); // returns the current position of the file pointer (end, which = file size)
+    // the distinction between an initializer list and a single size argument matters for std::vector (be careful)
+    std::vector<char> buffer(fileSize);
+
+    file.seekg(0); // Resets the file pointer to the beginning of the file, preparing it for reading from the start.
+    file.read(buffer.data(), fileSize); // reads fileSize bytes from the file into the buffer
+    file.close();
+
+    return buffer;
 }
 
 struct QueueFamilyIndices
@@ -991,6 +1017,15 @@ private:
         }
     }
 
+    void createGraphicsPipeline()
+    {
+        auto vertexShaderCode = readFile("shaders/vert.spv");
+        auto fragmentShaderCode = readFile("shaders/frag.spv");
+
+        std::cout << vertexShaderCode.size() << std::endl;
+        std::cout << fragmentShaderCode.size() << std::endl;
+    }
+
     void initVulkan() 
     {
         createInstance();
@@ -1000,6 +1035,7 @@ private:
         createLogicalDevice();
         createSwapChain();
         createImageViews();
+        createGraphicsPipeline();
     }
 
     void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) 
