@@ -5,11 +5,13 @@
 #include <stdexcept>
 #include <cstdlib> // provides the EXIT_SUCCESS and EXIT_FAILURE macros
 #include <vector>
-#include <algorithm> //std::find_if; C++20 has the more concise std::ranges::find in <ranges>
+#include <algorithm> //std::clamp and std::find_if; C++20 has the more concise std::ranges::find in <ranges>
 #include <sstream> // std::ostringstream; C++20 has std::format in <format>
 #include <cstring> // strcmp compares two strings character by character. If the strings are equal, the function returns 0.
 #include <optional> // C++17
 #include <set>
+#include <cstdint> // uint32_t
+#include <limits> // std::numeric_limits
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -172,6 +174,10 @@ struct QueueFamilyIndices
 */
 struct SwapChainSupportDetails
 {
+    /*
+        The VkSurfaceCapabilitiesKHR structure includes minImageExtent and maxImageExtent fields that define 
+        the minimum and maximum dimensions of swap chain images that the device supports for the surface in question.
+    */
     VkSurfaceCapabilitiesKHR capabilities;
     std::vector<VkSurfaceFormatKHR> formats;
     std::vector<VkPresentModeKHR> presentModes;
@@ -194,7 +200,7 @@ private:
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger; // The debug callback is managed with a handle that needs to be explicitly created and destroyed.
     VkSurfaceKHR surface;
-    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE; // Implicitly destroyed when the VkInstance is destroyed.
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE; // Implicitly destroyed when the VkInstance is destroyed
     VkDevice device; // logical device
     /*
         The queues are automatically created along with the logical device, but we need a handle to interface with them.
@@ -202,6 +208,7 @@ private:
     */
     VkQueue graphicsQueue;
     VkQueue presentQueue;
+    VkSwapchainKHR swapChain;
 
     void initWindow() 
     {
@@ -701,6 +708,231 @@ private:
         vkGetDeviceQueue(device, indices.presentFamily.value(), 0, &presentQueue);
     }
 
+    /*
+        Each VkSurfaceFormatKHR entry contains a format and a colorSpace member. The format member specifies the color 
+        channels and types. For example, VK_FORMAT_B8G8R8A8_SRGB means that we store the B, G, R and alpha channels in 
+        that order with an 8 bit unsigned integer for a total of 32 bits per pixel. The colorSpace member indicates if 
+        the SRGB color space is supported or not using the VK_COLOR_SPACE_SRGB_NONLINEAR_KHR flag.
+    */
+    VkSurfaceFormatKHR selectSwapSurfaceFormat(const std::vector< VkSurfaceFormatKHR>& availableFormats)
+    {
+        for (const auto& availableFormat : availableFormats)
+        {
+            /*
+                For the color space we’ll use SRGB if it is available, because it results in more accurate perceived colors. 
+                It is also the standard color space for images, like the textures we’ll use later on. 
+                Because of that we should also use an SRGB color format, of which one of the most common ones is VK_FORMAT_B8G8R8A8_SRGB.
+            */
+            if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB && availableFormat.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+            {
+                return availableFormat;
+            }
+        }
+
+        // We could start rank the available formats based on how "good" they are, 
+        // but in most cases it’s okay to just settle with the first format that is specified.
+        return availableFormats[0];
+    }
+
+    /*
+        The presentation mode is the most important setting for the swap chain because it represents the actual conditions for showing images 
+        to the screen. There are four possible modes available in Vulkan:
+
+        VK_PRESENT_MODE_IMMEDIATE_KHR: Images submitted by your application are transferred to the screen right away, which may result in tearing.
+
+        VK_PRESENT_MODE_FIFO_KHR: The swap chain is a queue where the display takes an image from the front of the queue when the display is refreshed and the program inserts rendered images at the back of the queue. If the queue is full then the program has to wait. This is most similar to vertical sync as found in modern games. The moment that the display is refreshed is known as "vertical blank".
+
+        VK_PRESENT_MODE_FIFO_RELAXED_KHR: This mode only differs from the previous one if the application is late and the queue was empty at the last vertical blank. Instead of waiting for the next vertical blank, the image is transferred right away when it finally arrives. This may result in visible tearing.
+
+        VK_PRESENT_MODE_MAILBOX_KHR: This is another variation of the second mode. Instead of blocking the application when the queue is full, the images that are already queued are simply replaced with the newer ones. This mode can be used to render frames as fast as possible while still avoiding tearing, resulting in fewer latency issues than standard vertical sync. This is commonly known as "triple buffering", although the existence of three buffers alone does not necessarily mean that the framerate is unlocked.
+    */
+    VkPresentModeKHR selectSwapPresentMode(const std::vector<VkPresentModeKHR>& availablePresentModes)
+    {
+        for (const auto& availablePresentMode : availablePresentModes)
+        {
+            /*
+                VK_PRESENT_MODE_MAILBOX_KHR (triple buffering) is a nice trade-off if energy usage is not a concern. 
+                It allows us to avoid tearing while still maintaining a fairly low latency by rendering new images 
+                that are as up-to-date as possible right until the vertical blank. 
+                On mobile devices, where energy usage is more important, use VK_PRESENT_MODE_FIFO_KHR instead.
+            */
+            if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR)
+            {
+                return availablePresentMode;
+            }
+        }
+
+        // VK_PRESENT_MODE_FIFO_KHR (v-sync) mode is guaranteed to be available
+        return VK_PRESENT_MODE_FIFO_KHR;
+    }
+
+    /*
+        The swap extent is the resolution of the swap chain images and it’s almost always exactly equal to the resolution of the window 
+        that we’re drawing to in pixels. The range of the possible resolutions is defined in the VkSurfaceCapabilitiesKHR structure. 
+        Vulkan tells us to match the resolution of the window by setting the width and height in the currentExtent member. 
+        However, some window managers do allow us to differ here and this is indicated by setting the width and height in currentExtent 
+        to a special value: the maximum value of uint32_t. In that case we’ll pick the resolution that best matches the window within 
+        the minImageExtent and maxImageExtent bounds. But we must specify the resolution in the correct unit.
+    */
+    VkExtent2D selectSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities)
+    {
+        /*
+            GLFW uses two units when measuring sizes: pixels and screen coordinates. For example, the resolution {WIDTH, HEIGHT} 
+            that we specified when creating the window is measured in screen coordinates. But Vulkan works with pixels, 
+            so the swap chain extent must be specified in pixels as well. Unfortunately, if we are using a high DPI display 
+            (like Apple’s Retina display), screen coordinates don’t correspond to pixels. Instead, due to the higher pixel density, 
+            the resolution of the window in pixels will be larger than the resolution in screen coordinates. So if Vulkan doesn’t 
+            fix the swap extent for us, we can’t just use the original {WIDTH, HEIGHT}. Instead, we must use glfwGetFramebufferSize 
+            to query the resolution of the window in pixels before matching it against the minimum and maximum image extent.
+        */
+        if (capabilities.currentExtent.width == std::numeric_limits<uint32_t>::max())
+        {
+            // Required by Vulkan since currentExtent width and height do not match the window resolution. A value of 
+            // std::numeric_limits<uint32_t>::max() indicates that the surface size will be determined by the extent of the swap chain images.
+            int width, height;
+            /*
+                Retrieves the resolution of the window in pixels. GLFW, or any windowing system, may allow the creation of windows with 
+                dimensions outside the bounds supported by the Vulkan implementation on the device for a given surface (i.e. a window might 
+                be resized by the user or the system to dimensions larger or smaller than what the device can handle for rendering).
+            */
+            glfwGetFramebufferSize(window, &width, &height);
+
+            VkExtent2D actualExtent
+            {
+                static_cast<uint32_t>(width),
+                static_cast<uint32_t>(height)
+            };
+
+            /*
+                The clamp function is used here to bound the values of width and height between the allowed minimum and maximum extents 
+                that are supported by the implementation. Clamping is a way to gracefully handle cases where the window size doesn't match 
+                the GPU's supported sizes exactly, allowing for flexible window management while still adhering to the device's constraints.
+            */
+            actualExtent.width = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
+            actualExtent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+
+            return actualExtent;
+        }
+        else
+        {
+            // currentExtent width and height already match the window resolution
+            return capabilities.currentExtent;
+        }
+    }
+
+    /*
+        Find the settings for the best possible swap chain. If the swapChainAdequate conditions 
+        were met then the support is definitely sufficient, but there may still be many 
+        different modes of varying optimality. There are three types of settings to determine:
+
+        1. Surface format (color depth)
+        2. Presentation mode (conditions for "swapping" images to the screen)
+        3. Swap extent (resolution of images in swap chain)
+
+        For each of these settings we’ll have an ideal value in mind that we’ll go with if 
+        it’s available and otherwise we’ll create some logic to find the next best thing.
+    */
+    void createSwapChain()
+    {
+        SwapChainSupportDetails swapChainSupport = querySwapChainSupport(physicalDevice);
+
+        VkSurfaceFormatKHR surfaceFormat = selectSwapSurfaceFormat(swapChainSupport.formats);
+        VkPresentModeKHR presentMode = selectSwapPresentMode(swapChainSupport.presentModes);
+        VkExtent2D extent = selectSwapExtent(swapChainSupport.capabilities);
+
+        /*
+            Decide how many images we would like to have in the swap chain. Selecting the minimum means that we may sometimes have 
+            to wait on the driver to complete internal operations before we can acquire another image to render to. Therefore it is 
+            recommended to request at least one more image than the minimum. We should also make sure to not exceed the maximum 
+            number of images, where 0 is a special value that means that there is no maximum.
+        */
+        uint32_t imageCount = swapChainSupport.capabilities.minImageCount + 1;
+
+        if (swapChainSupport.capabilities.maxImageCount > 0 && imageCount > swapChainSupport.capabilities.maxImageCount) 
+        {
+            imageCount = swapChainSupport.capabilities.maxImageCount;
+        }
+
+        VkSwapchainCreateInfoKHR createInfo {};
+
+        createInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        createInfo.surface = surface;
+        createInfo.minImageCount = imageCount;
+        createInfo.imageFormat = surfaceFormat.format;
+        createInfo.imageColorSpace = surfaceFormat.colorSpace;
+        createInfo.imageExtent = extent;
+        /*
+            Single Layer: For the majority of applications, each image in the swap chain will consist of a single layer. 
+            This is the case for standard 2D applications, where you're rendering a single image to be displayed on the screen. 
+            Therefore, imageArrayLayers is always set to 1.
+
+            Stereoscopic 3D Applications: In the context of stereoscopic 3D applications, the application needs to render a separate image 
+            for each eye to create a 3D effect. This requires two layers per image in the swap chain—one for the left eye and one for the 
+            right eye. For such applications, imageArrayLayers would be set to 2 to accommodate both layers within each swap chain image.
+            Vulkan supports not only standard 2D rendering but also more complex scenarios like stereoscopic 3D, virtual reality (VR), 
+            and augmented reality (AR), where multiple views (layers) are required to be rendered and presented simultaneously.
+        */
+        createInfo.imageArrayLayers = 1;
+        /*
+            We are going to render directly to them, which means that they’re used as color attachment. It is also possible to render 
+            images to a separate image first to perform operations like post-processing. In that case you may use a value like 
+            VK_IMAGE_USAGE_TRANSFER_DST_BIT instead and use a memory operation to transfer the rendered image to a swap chain image.
+        */
+        createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+        QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
+        uint32_t queueFamilyIndices[] = { indices.graphicsFamily.value(), indices.presentFamily.value() };
+
+        if (indices.graphicsFamily != indices.presentFamily) 
+        {
+            // Images can be used across multiple queue families without explicit ownership transfers.
+            createInfo.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+            createInfo.queueFamilyIndexCount = 2;
+            createInfo.pQueueFamilyIndices = queueFamilyIndices;
+        }
+        else 
+        {
+            /*
+                An image is owned by one queue family at a time and ownership must be explicitly transferred 
+                before using it in another queue family. This option offers the best performance.
+                The graphics queue family and presentation queue family are the same on most GPUs.
+            */
+            createInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            createInfo.queueFamilyIndexCount = 0; // Optional
+            createInfo.pQueueFamilyIndices = nullptr; // Optional
+        }
+
+        /*
+            We can specify that a certain transform should be applied to images in the swap chain if it is supported 
+            (supportedTransforms in capabilities), like a 90 degree clockwise rotation or horizontal flip. 
+            To specify that you do not want any transformation, simply specify the current transformation.
+        */
+        createInfo.preTransform = swapChainSupport.capabilities.currentTransform;
+        /*
+            specifies if the alpha channel should be used for blending with other windows in the window system.
+            We almost always want to simply ignore the alpha channel, hence VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR.
+        */ 
+        createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+        createInfo.presentMode = presentMode;
+        /*
+            If clipped is set to VK_TRUE then that means that we don’t care about the color of pixels that are obscured, 
+            for example because another window is in front of them. Unless you really need to be able to read these 
+            pixels back and get predictable results, you’ll get the best performance by enabling clipping.
+        */
+        createInfo.clipped = VK_TRUE;
+        /*
+            With Vulkan it’s possible that your swap chain becomes invalid or unoptimized while your application is running, 
+            for example because the window was resized. In that case the swap chain actually needs to be recreated from scratch and a 
+            reference to the old one must be specified in this field. For now we assume that we will only ever create one swap chain.
+        */
+        createInfo.oldSwapchain = VK_NULL_HANDLE;
+
+        if (vkCreateSwapchainKHR(device, &createInfo, nullptr, &swapChain) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create swap chain.");
+        }
+    }
+
     void initVulkan() 
     {
         createInstance();
@@ -708,6 +940,7 @@ private:
         createSurface();
         selectPhysicalDevice();
         createLogicalDevice();
+        createSwapChain();
     }
 
     void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) 
@@ -749,6 +982,8 @@ private:
 
     void cleanup() 
     {
+        // Note the reverse order of deletions based on dependencies
+        vkDestroySwapchainKHR(device, swapChain, nullptr);
         // Logical devices don’t interact directly with instances, which is why instance is not included as a parameter.
         vkDestroyDevice(device, nullptr);
 
