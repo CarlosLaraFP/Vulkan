@@ -242,6 +242,7 @@ private:
     VkExtent2D swapChainExtent; // required for VkViewport in the graphics pipeline
     VkRenderPass renderPass;
     VkPipelineLayout pipelineLayout;
+    VkPipeline graphicsPipeline;
 
     void initWindow() 
     {
@@ -1020,6 +1021,7 @@ private:
     }
 
     /*
+        Render pass: The attachments referenced by the pipeline stages and their usage.
         A single render pass can consist of multiple subpasses. Subpasses are subsequent rendering operations that depend on the contents 
         of framebuffers in previous passes, for example a sequence of post-processing effects that are applied one after another. If you 
         group these rendering operations into one render pass, then Vulkan is able to reorder the operations and conserve memory 
@@ -1260,6 +1262,7 @@ private:
             (0, 0) to (width, height). The swap chain images will be used as framebuffers later, so we should stick to their size.
             The minDepth and maxDepth values specify the range of depth values for the framebuffer and must be within [0.0f, 1.0f].
         */
+        /*
         VkViewport viewport {};
 
         viewport.x = 0.0f;
@@ -1268,6 +1271,7 @@ private:
         viewport.height = (float)swapChainExtent.height;
         viewport.minDepth = 0.0f;
         viewport.maxDepth = 1.0f;
+        */
 
         /*
             While viewports define the transformation from the image to the framebuffer, scissor rectangles define in 
@@ -1275,19 +1279,33 @@ private:
             by the rasterizer. They function like a filter rather than a transformation. 
             If we want to draw to the entire framebuffer, specify a scissor rectangle that covers it entirely.
         */
+        /*
         VkRect2D scissor{};
 
         scissor.offset = { 0, 0 };
         scissor.extent = swapChainExtent;
+        */
 
         /*
-            Viewport(s) and scissor rectangle(s) can either be specified as a static part of the pipeline or as a dynamic 
-            state set in the command buffer. While the former is more in line with the other states it’s often convenient 
-            to make viewport and scissor state dynamic as it gives you a lot more flexibility. This is very common and all 
-            implementations can handle this dynamic state without a performance penalty. When opting for dynamic viewport(s) 
+            Viewport(s) and scissor rectangle(s) can either be specified as a static part of the pipeline or as a dynamic
+            state set in the command buffer. While the former is more in line with the other states it’s often convenient
+            to make viewport and scissor state dynamic as it gives you a lot more flexibility. This is very common and all
+            implementations can handle this dynamic state without a performance penalty. When opting for dynamic viewport(s)
             and scissor rectangle(s) you need to enable the respective dynamic states for the pipeline.
             The actual viewport(s) and scissor rectangle(s) would then later be set up at drawing time.
         */
+        std::vector<VkDynamicState> dynamicStates =
+        {
+            VK_DYNAMIC_STATE_VIEWPORT,
+            VK_DYNAMIC_STATE_SCISSOR
+        };
+
+        VkPipelineDynamicStateCreateInfo dynamicState {};
+
+        dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynamicState.dynamicStateCount = static_cast<uint32_t>(dynamicStates.size());
+        dynamicState.pDynamicStates = dynamicStates.data();
+
         VkPipelineViewportStateCreateInfo viewportState {};
         /*
             Without dynamic state, the viewport and scissor rectangle need to be set in the pipeline using the 
@@ -1296,9 +1314,9 @@ private:
         */
         viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
         viewportState.viewportCount = 1;
-        viewportState.pViewports = &viewport;
+        //viewportState.pViewports = &viewport;
         viewportState.scissorCount = 1;
-        viewportState.pScissors = &scissor;
+        //viewportState.pScissors = &scissor;
 
         /*
             The rasterizer takes the geometry that is shaped by the vertices from the vertex shader and turns it into fragments 
@@ -1381,7 +1399,6 @@ private:
             pointer to such a struct. Depth and stencil testing will be revisited in depth buffering.
         */
 
-
         /*
             After a fragment shader has returned a color, it needs to be combined with the color that is already in the framebuffer. 
             This transformation is known as color blending and there are two ways to do it:
@@ -1433,7 +1450,11 @@ private:
         colorBlending.blendConstants[2] = 0.0f; // Optional
         colorBlending.blendConstants[3] = 0.0f; // Optional
 
+        // Fixed functions end
+
         /*
+            Pipeline layout: the uniform and push values referenced by the shader that can be updated at draw time.
+
             We can use uniform values in shaders, which are globals similar to dynamic state variables that can be changed at 
             drawing time to alter the behavior of our shaders without having to recreate them. They are commonly used to pass 
             the transformation matrix to the vertex shader, or to create texture samplers in the fragment shader.
@@ -1455,7 +1476,52 @@ private:
             throw std::runtime_error("Failed to create pipeline layout.");
         }
 
-        // Fixed functions end
+        VkGraphicsPipelineCreateInfo pipelineInfo {};
+
+        // Referencing the shader tages
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.stageCount = 2; // 1 vertex and 1 fragment
+        pipelineInfo.pStages = shaderStages;
+        // Referencing all of the structures describing the fixed-function stage.
+        pipelineInfo.pVertexInputState = &vertexInputInfo;
+        pipelineInfo.pInputAssemblyState = &inputAssembly;
+        pipelineInfo.pViewportState = &viewportState;
+        pipelineInfo.pRasterizationState = &rasterizer;
+        pipelineInfo.pMultisampleState = &multisampling;
+        pipelineInfo.pDepthStencilState = nullptr; // Optional
+        pipelineInfo.pColorBlendState = &colorBlending;
+        pipelineInfo.pDynamicState = &dynamicState;
+        // the pipeline layout is a Vulkan handle rather than a struct pointer
+        pipelineInfo.layout = pipelineLayout;
+        /*
+            Referencing the render pass and the index of the subpass where this graphics pipeline will be used. 
+            It is also possible to use other render passes with this pipeline instead of this specific instance, 
+            but they have to be compatible with renderPass. The requirements for compatibility are described in the documentation.
+        */
+        pipelineInfo.renderPass = renderPass;
+        pipelineInfo.subpass = 0;
+        /*
+            Vulkan allows us to create a new graphics pipeline by deriving from an existing pipeline. The idea of pipeline derivatives 
+            is that it is less expensive to set up pipelines when they have much functionality in common with an existing pipeline and 
+            switching between pipelines from the same parent can also be done quicker. You can either specify the handle of an existing 
+            pipeline with basePipelineHandle or reference another pipeline that is about to be created by index with basePipelineIndex. 
+            Right now there is only a single pipeline, so we simply specify a null handle and an invalid index. These values are only 
+            used if the VK_PIPELINE_CREATE_DERIVATIVE_BIT flag is also specified in the flags field of VkGraphicsPipelineCreateInfo.
+        */
+        pipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // Optional
+        pipelineInfo.basePipelineIndex = -1; // Optional
+
+        /*
+            The vkCreateGraphicsPipelines function is designed to take multiple VkGraphicsPipelineCreateInfo objects and create multiple 
+            VkPipeline objects in a single call. The second parameter, for which we’ve passed the VK_NULL_HANDLE argument, references an 
+            optional VkPipelineCache object. A pipeline cache can be used to store and reuse data relevant to pipeline creation across 
+            multiple calls to vkCreateGraphicsPipelines and even across program executions if the cache is stored to a file. This makes 
+            it possible to significantly speed up pipeline creation at a later time. We’ll get into this in the pipeline cache chapter.
+        */
+        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create graphics pipeline.");
+        }
 
         vkDestroyShaderModule(device, fragmentModule, nullptr);
         vkDestroyShaderModule(device, vertexModule, nullptr);
@@ -1515,6 +1581,7 @@ private:
     {
         // Note the reverse order of deletions based on dependencies
 
+        vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyRenderPass(device, renderPass, nullptr);
 
