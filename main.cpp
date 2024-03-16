@@ -239,7 +239,7 @@ private:
     std::vector<VkImage> swapChainImages;
     std::vector<VkImageView> swapChainImageViews; // describes how to access the image and which part of the image to access
     VkFormat swapChainImageFormat; // required for VkImageViewCreateInfo
-    VkExtent2D swapChainExtent;
+    VkExtent2D swapChainExtent; // required for VkViewport in the graphics pipeline
 
     void initWindow() 
     {
@@ -1017,13 +1017,176 @@ private:
         }
     }
 
+    /*
+        Vulkan expects shader code to be passed as a pointer to uint32_t in the pCode field of the VkShaderModuleCreateInfo struct, 
+        aligned to a 4-byte boundary, because shaders are consumed as an array of 32-bit words. This is because GPU hardware and the 
+        SPIR-V shader bytecode format are designed to work with 32-bit instructions. In practice, this means that when you store shader 
+        code in a std::vector<char>, even though char could technically be stored at any byte boundary, the memory allocated by the 
+        vector's default allocator will be aligned in such a way that converting the address to a uint32_t* pointer for Vulkan's use 
+        will still respect the 4-byte alignment requirement. This alignment ensures that when Vulkan accesses the shader code as an 
+        array of 32-bit words, those accesses are correctly aligned according to the hardware and API requirements, thus maintaining 
+        performance and preventing potential errors. Using reinterpret_cast to convert char* to uint32_t* makes the programmer's 
+        intent explicit and maintains type safety. The use of const in this context is also aligned with the Vulkan API's requirement 
+        that the shader code should not be modified during shader module creation, although the const qualifier may need to be adjusted 
+        depending on the API's expectations and the const correctness of the data.
+    */
+    VkShaderModule createShaderModule(const std::vector<char>& code)
+    {
+        VkShaderModuleCreateInfo createInfo {};
+
+        createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        createInfo.codeSize = code.size();
+        /*
+            C-style casts like (uint32_t*)code.data() are versatile but potentially unsafe, as they do not provide 
+            compile-time type checking. They can perform a combination of static_cast, reinterpret_cast, const_cast, 
+            and even dynamic_cast operations, depending on the context.
+
+            reinterpret_cast<const uint32_t*>(code.data()) explicitly reinterprets the pointer type without changing 
+            the bit pattern of the pointer value. reinterpret_cast is more specific and safer than C-style casts because 
+            it limits the kinds of conversions that can be performed, making the programmer's intent clearer and reducing 
+            the risk of unintended conversions. Adding const in this cast also indicates that the pointed-to data should 
+            not be modified, which is important for type safety and maintaining const correctness.
+        */
+        createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+
+        VkShaderModule shaderModule {};
+
+        if (vkCreateShaderModule(device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create shader module.");
+        }
+
+        // The buffer with the code can be freed immediately after creating the shader module.
+        //delete code.data();
+
+        return shaderModule;
+    }
+
+    /*
+        In Vulkan you have to be explicit about most pipeline states as it will be baked into an immutable pipeline state object.
+        The compilation and linking of the SPIR-V bytecode to machine code for execution by the GPU doesn’t happen until the graphics
+        pipeline is created. That means that we’re allowed to destroy the shader modules again as soon as pipeline creation is 
+        finished, which is why we’ll make them local variables in the createGraphicsPipeline function instead of class members.
+    */
     void createGraphicsPipeline()
     {
         auto vertexShaderCode = readFile("shaders/vert.spv");
         auto fragmentShaderCode = readFile("shaders/frag.spv");
 
-        std::cout << vertexShaderCode.size() << std::endl;
-        std::cout << fragmentShaderCode.size() << std::endl;
+        //std::cout << vertexShaderCode.size() << std::endl;
+        //std::cout << fragmentShaderCode.size() << std::endl;
+
+        auto vertexModule = createShaderModule(vertexShaderCode);
+        auto fragmentModule = createShaderModule(fragmentShaderCode);
+
+        VkPipelineShaderStageCreateInfo vertexStageInfo {};
+
+        vertexStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        vertexStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT; // there is an enum value for each of the programmable stages
+        vertexStageInfo.module = vertexModule;
+        /*
+            Specifies the function to invoke (entrypoint). Tt’s possible to combine multiple fragment shaders into 
+            a single shader module and use different entry points to differentiate between their behaviors.
+        */
+        vertexStageInfo.pName = "main";
+        /*
+            There is one more (optional) member, pSpecializationInfo, that allows you to specify values for shader constants. 
+            You can use a single shader module where its behavior can be configured at pipeline creation by specifying different 
+            values for the constants used in it. This is more efficient than configuring the shader using variables at render time, 
+            because the compiler can do optimizations like eliminating if statements that depend on these values. If you don’t have 
+            any constants like that, then you can set the member to nullptr, which our struct initialization does automatically.
+        */
+
+        VkPipelineShaderStageCreateInfo fragmentStageInfo {};
+
+        fragmentStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        fragmentStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        fragmentStageInfo.module = fragmentModule;
+        fragmentStageInfo.pName = "main";
+
+        VkPipelineShaderStageCreateInfo shaderStages[] = { vertexStageInfo, fragmentStageInfo };
+
+        /*
+            Describes the format of the vertex data that will be passed to the vertex shader in roughly two ways:
+
+            Bindings: spacing between data and whether the data is per-vertex or per-instance (see instancing)
+
+            Attribute descriptions: type of the attributes passed to the vertex shader, which binding to load them from and at which offset
+        */
+        VkPipelineVertexInputStateCreateInfo vertexInputInfo {};
+        // Since we are hard coding the vertex data directly in the vertex shader, specify that there is no vertex data to load for now.
+        vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+        vertexInputInfo.vertexBindingDescriptionCount = 0;
+        vertexInputInfo.pVertexBindingDescriptions = nullptr; // Optional
+        vertexInputInfo.vertexAttributeDescriptionCount = 0;
+        vertexInputInfo.pVertexAttributeDescriptions = nullptr; // Optional
+
+        VkPipelineInputAssemblyStateCreateInfo inputAssembly {};
+        /*
+            The topology member describes what kind of geometry will be drawn from the vertices and can have values like:
+
+            VK_PRIMITIVE_TOPOLOGY_POINT_LIST: points from vertices
+
+            VK_PRIMITIVE_TOPOLOGY_LINE_LIST: line from every 2 vertices without reuse
+
+            VK_PRIMITIVE_TOPOLOGY_LINE_STRIP: the end vertex of every line is used as start vertex for the next line
+
+            VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST: triangle from every 3 vertices without reuse
+
+            `VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP `: the second and third vertex of every triangle are used as first two vertices of the next triangle
+
+            Normally, the vertices are loaded from the vertex buffer by index in sequential order, but with an element buffer 
+            you can specify the indices to use yourself. This allows you to perform optimizations like reusing vertices. If 
+            you set the primitiveRestartEnable member to VK_TRUE, then it’s possible to break up lines and triangles in the 
+            _STRIP topology modes by using a special index of 0xFFFF or 0xFFFFFFFF.
+        */
+        inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST; // We only draw triangles in this project
+        inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+        /*
+            A viewport describes the region of the framebuffer that the output will be rendered to. This will almost always be 
+            (0, 0) to (width, height). The swap chain images will be used as framebuffers later, so we should stick to their size.
+            The minDepth and maxDepth values specify the range of depth values for the framebuffer and must be within [0.0f, 1.0f].
+        */
+        VkViewport viewport {};
+
+        viewport.x = 0.0f;
+        viewport.y = 0.0f;
+        viewport.width = (float)swapChainExtent.width;
+        viewport.height = (float)swapChainExtent.height;
+        viewport.minDepth = 0.0f;
+        viewport.maxDepth = 1.0f;
+
+        /*
+            While viewports define the transformation from the image to the framebuffer, scissor rectangles define in 
+            which regions pixels will actually be stored. Any pixels outside the scissor rectangles will be discarded 
+            by the rasterizer. They function like a filter rather than a transformation. 
+            If we want to draw to the entire framebuffer, specify a scissor rectangle that covers it entirely.
+        */
+        VkRect2D scissor{};
+
+        scissor.offset = { 0, 0 };
+        scissor.extent = swapChainExtent;
+
+        /*
+            Viewport(s) and scissor rectangle(s) can either be specified as a static part of the pipeline or as a dynamic 
+            state set in the command buffer. While the former is more in line with the other states it’s often convenient 
+            to make viewport and scissor state dynamic as it gives you a lot more flexibility. This is very common and all 
+            implementations can handle this dynamic state without a performance penalty. When opting for dynamic viewport(s) 
+            and scissor rectangle(s) you need to enable the respective dynamic states for the pipeline.
+            The actual viewport(s) and scissor rectangle(s) would then later be set up at drawing time.
+        */
+        VkPipelineViewportStateCreateInfo viewportState {};
+
+        viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        viewportState.viewportCount = 1;
+        viewportState.pViewports = &viewport;
+        viewportState.scissorCount = 1;
+        viewportState.pScissors = &scissor;
+
+        vkDestroyShaderModule(device, fragmentModule, nullptr);
+        vkDestroyShaderModule(device, vertexModule, nullptr);
     }
 
     void initVulkan() 
