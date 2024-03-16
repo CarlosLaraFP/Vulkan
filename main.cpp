@@ -240,6 +240,7 @@ private:
     std::vector<VkImageView> swapChainImageViews; // describes how to access the image and which part of the image to access
     VkFormat swapChainImageFormat; // required for VkImageViewCreateInfo
     VkExtent2D swapChainExtent; // required for VkViewport in the graphics pipeline
+    VkPipelineLayout pipelineLayout;
 
     void initWindow() 
     {
@@ -1017,6 +1018,11 @@ private:
         }
     }
 
+    void createRenderPass()
+    {
+
+    }
+
     /*
         Vulkan expects shader code to be passed as a pointer to uint32_t in the pCode field of the VkShaderModuleCreateInfo struct, 
         aligned to a 4-byte boundary, because shaders are consumed as an array of 32-bit words. This is because GPU hardware and the 
@@ -1106,6 +1112,8 @@ private:
 
         VkPipelineShaderStageCreateInfo shaderStages[] = { vertexStageInfo, fragmentStageInfo };
 
+        // Fixed functions start
+
         /*
             Describes the format of the vertex data that will be passed to the vertex shader in roughly two ways:
 
@@ -1178,12 +1186,173 @@ private:
             The actual viewport(s) and scissor rectangle(s) would then later be set up at drawing time.
         */
         VkPipelineViewportStateCreateInfo viewportState {};
-
+        /*
+            Without dynamic state, the viewport and scissor rectangle need to be set in the pipeline using the 
+            VkPipelineViewportStateCreateInfo struct. This makes the viewport and scissor rectangle for this pipeline 
+            immutable. Any changes required to these values would require a new pipeline to be created with the new values.
+        */
         viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
         viewportState.viewportCount = 1;
         viewportState.pViewports = &viewport;
         viewportState.scissorCount = 1;
         viewportState.pScissors = &scissor;
+
+        /*
+            The rasterizer takes the geometry that is shaped by the vertices from the vertex shader and turns it into fragments 
+            to be colored by the fragment shader. It also performs depth testing, face culling and the scissor test, and it can 
+            be configured to output fragments that fill entire polygons or just the edges (wireframe rendering).
+        */
+        VkPipelineRasterizationStateCreateInfo rasterizer {};
+
+        rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        /*
+            If depthClampEnable is set to VK_TRUE, then fragments that are beyond the near and far planes are clamped to them as 
+            opposed to discarding them. This is useful in some special cases like shadow maps. Using this requires enabling a GPU feature 
+            because not all graphics cards support this. For shadow maps, rendering objects that are partially or fully outside the 
+            camera's view can be necessary to correctly calculate shadows for objects that are within view. Depth clamping allows these 
+            out-of-view objects to still contribute to the shadow map, improving the quality of shadows at the edges of the view frustum.
+
+            Normally, fragments that would end up outside the near or far planes after the perspective division (which converts clip space 
+            coordinates to normalized device coordinates) are discarded. When depthClampEnable is set to VK_TRUE, these fragments are not 
+            discarded. Instead, their depth values are clamped to the near or far plane values. The key point is that while the clipping 
+            operations to the side planes of the frustum still occur, the depth clamping modifies how out-of-bound depth values are treated,
+            preventing their outright discarding based solely on depth.
+        */
+        rasterizer.depthClampEnable = VK_FALSE;
+        // If VK_TRUE, then geometry never passes through the rasterizer stage. This basically disables any output to the framebuffer.
+        rasterizer.rasterizerDiscardEnable = VK_FALSE;
+        /*
+            The polygonMode determines how fragments are generated for geometry. The following modes are available:
+
+            VK_POLYGON_MODE_FILL: fill the area of the polygon with fragments
+
+            VK_POLYGON_MODE_LINE: polygon edges are drawn as lines
+
+            VK_POLYGON_MODE_POINT: polygon vertices are drawn as points
+
+            Using any mode other than fill requires enabling a GPU feature because not all graphics cards support the other modes.
+        */
+        rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+        /*
+            The lineWidth member describes the thickness of lines in terms of number of fragments. The maximum line width that is 
+            supported depends on the hardware and any line thicker than 1.0f requires you to enable the wideLines GPU feature.
+        */
+        rasterizer.lineWidth = 1.0f;
+        /*
+            The cullMode variable determines the type of face culling to use. You can disable culling, 
+            cull the front faces, cull the back faces or both. The frontFace variable specifies the 
+            vertex order for faces to be considered front-facing and can be clockwise or counterclockwise.
+        */
+        rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+        rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        /*
+            The rasterizer can alter the depth values by adding a constant value or biasing them based on a fragment’s slope. 
+            This is sometimes used for shadow mapping, but we won’t be using it.
+        */
+        rasterizer.depthBiasEnable = VK_FALSE;
+        rasterizer.depthBiasConstantFactor = 0.0f; // Optional
+        rasterizer.depthBiasClamp = 0.0f; // Optional
+        rasterizer.depthBiasSlopeFactor = 0.0f; // Optional
+
+        /*
+            Configures multisampling, which is one of the ways to perform anti-aliasing. 
+            It works by combining the fragment shader results of multiple polygons that rasterize to the same pixel. 
+            This mainly occurs along edges, which is also where the most noticeable aliasing artifacts occur. 
+            Because it doesn’t need to run the fragment shader multiple times if only one polygon maps to a pixel, 
+            it is significantly less expensive than simply rendering to a higher resolution and then downscaling. 
+            Enabling it requires enabling a GPU feature because not all graphics cards support it.
+        */
+        VkPipelineMultisampleStateCreateInfo multisampling {}; // disabled for now
+
+        multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        multisampling.sampleShadingEnable = VK_FALSE;
+        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        multisampling.minSampleShading = 1.0f; // Optional
+        multisampling.pSampleMask = nullptr; // Optional
+        multisampling.alphaToCoverageEnable = VK_FALSE; // Optional
+        multisampling.alphaToOneEnable = VK_FALSE; // Optional
+
+        /*
+            If you are using a depth and/or stencil buffer, then you also need to configure the depth and stencil tests using 
+            VkPipelineDepthStencilStateCreateInfo. We don’t have one right now, so we can simply pass a nullptr instead of a 
+            pointer to such a struct. Depth and stencil testing will be revisited in depth buffering.
+        */
+
+
+        /*
+            After a fragment shader has returned a color, it needs to be combined with the color that is already in the framebuffer. 
+            This transformation is known as color blending and there are two ways to do it:
+
+            - Mix the old and new value to produce a final color (per-framebuffer struct below)
+            - Combine the old and new value using a bitwise operation
+
+            There are two types of structs to configure color blending. The first struct, VkPipelineColorBlendAttachmentState 
+            contains the configuration per attached framebuffer and the second struct, VkPipelineColorBlendStateCreateInfo 
+            contains the global color blending settings. In our case we only have one framebuffer.
+        */
+        VkPipelineColorBlendAttachmentState colorBlendAttachment {};
+        /*
+            If blendEnable is set to VK_FALSE, then the new color from the fragment shader is passed through unmodified. 
+            Otherwise, the two mixing operations are performed to compute a new color. 
+            The resulting color is AND’d with the colorWriteMask to determine which channels are actually passed through.
+
+            The most common way to use color blending is to implement alpha blending, where we want 
+            the new color to be blended with the old color based on its opacity.
+        */
+        colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        colorBlendAttachment.blendEnable = VK_TRUE; // VK_FALSE and below comments means no blending (ignore destination pixels / overwrite)
+        colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA; // VK_BLEND_FACTOR_ONE
+        colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA; // VK_BLEND_FACTOR_ZERO
+        colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+        colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+        colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+        colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+
+        /*
+            References the array of structures for all of the framebuffers and allows us to 
+            set blend constants that we can use as blend factors in the above calculations.
+        */
+        VkPipelineColorBlendStateCreateInfo colorBlending {};
+        /*
+            If you want to use the second method of blending (bitwise combination), then you should set logicOpEnable to VK_TRUE. 
+            The bitwise operation can then be specified in the logicOp field. Note that this will automatically disable the first 
+            method, as if you had set blendEnable to VK_FALSE for every attached framebuffer! The colorWriteMask will also be used 
+            in this mode to determine which channels in the framebuffer will actually be affected. It is also possible to disable 
+            both modes, as we’ve done here, in which case the fragment colors will be written to the framebuffer unmodified.
+        */
+        colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        colorBlending.logicOpEnable = VK_FALSE;
+        colorBlending.logicOp = VK_LOGIC_OP_COPY; // Optional
+        colorBlending.attachmentCount = 1;
+        colorBlending.pAttachments = &colorBlendAttachment;
+        colorBlending.blendConstants[0] = 0.0f; // Optional
+        colorBlending.blendConstants[1] = 0.0f; // Optional
+        colorBlending.blendConstants[2] = 0.0f; // Optional
+        colorBlending.blendConstants[3] = 0.0f; // Optional
+
+        /*
+            We can use uniform values in shaders, which are globals similar to dynamic state variables that can be changed at 
+            drawing time to alter the behavior of our shaders without having to recreate them. They are commonly used to pass 
+            the transformation matrix to the vertex shader, or to create texture samplers in the fragment shader.
+
+            These uniform values need to be specified during pipeline creation by creating a VkPipelineLayout object. 
+            The structure also specifies push constants, which are another way of passing dynamic values to shaders.
+            Even though we won’t be using any of this yet, we are still required to create an empty pipeline layout.
+        */
+        VkPipelineLayoutCreateInfo pipelineLayoutInfo {};
+
+        pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        pipelineLayoutInfo.setLayoutCount = 0; // Optional
+        pipelineLayoutInfo.pSetLayouts = nullptr; // Optional
+        pipelineLayoutInfo.pushConstantRangeCount = 0; // Optional
+        pipelineLayoutInfo.pPushConstantRanges = nullptr; // Optional
+
+        if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) 
+        {
+            throw std::runtime_error("Failed to create pipeline layout.");
+        }
+
+        // Fixed functions end
 
         vkDestroyShaderModule(device, fragmentModule, nullptr);
         vkDestroyShaderModule(device, vertexModule, nullptr);
@@ -1198,6 +1367,7 @@ private:
         createLogicalDevice();
         createSwapChain();
         createImageViews();
+        createRenderPass();
         createGraphicsPipeline();
     }
 
@@ -1242,10 +1412,13 @@ private:
     {
         // Note the reverse order of deletions based on dependencies
 
+        vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+
         for (auto imageView : swapChainImageViews)
         {
             vkDestroyImageView(device, imageView, nullptr); // Unlike images, the image views were explicitly.
         }
+
         vkDestroySwapchainKHR(device, swapChain, nullptr);
         // Logical devices don’t interact directly with instances, which is why instance is not included as a parameter.
         vkDestroyDevice(device, nullptr);
