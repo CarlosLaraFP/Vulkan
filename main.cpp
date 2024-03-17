@@ -226,8 +226,8 @@ private:
     VkInstance instance;
     VkDebugUtilsMessengerEXT debugMessenger; // The debug callback is managed with a handle that needs to be explicitly created and destroyed.
     VkSurfaceKHR surface;
-    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE; // Implicitly destroyed when the VkInstance is destroyed
-    VkDevice device; // logical device
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE; // (query GPU features) Implicitly destroyed when the VkInstance is destroyed
+    VkDevice device; // logical device (use GPU features)
     /*
         The queues are automatically created along with the logical device, but we need a handle to interface with them.
         Device queues are implicitly cleaned up when the logical device is destroyed.
@@ -246,6 +246,9 @@ private:
     std::vector<VkFramebuffer> swapChainFramebuffers;
     VkCommandPool commandPool;
     VkCommandBuffer commandBuffer; // automatically freed when its command pool is destroyed
+    VkSemaphore imageAvailableSemaphore;
+    VkSemaphore renderFinishedSemaphore;
+    VkFence inFlightFence;
 
     void initWindow() 
     {
@@ -1761,6 +1764,35 @@ private:
         }
     }
 
+    /*
+        We need one semaphore to signal that an image has been acquired from the swapchain and is ready for rendering, 
+        another one to signal that rendering has finished and presentation can happen, 
+        and a fence to make sure only one frame is rendering at a time.
+    */
+    void createSyncObjects()
+    {
+        // Future versions of the Vulkan API or extensions may add functionality for the flags and pNext parameters.
+        VkSemaphoreCreateInfo semaphoreInfo {};
+        semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+        VkFenceCreateInfo fenceInfo {};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        /*
+            On the first frame we call drawFrame(), which immediately waits on inFlightFence to be signaled. 
+            inFlightFence is only signaled after a frame has finished rendering, yet since this is the first frame, 
+            there are no previous frames in which to signal the fence. Therefore, create the fence in the signaled state
+            so that the first call to vkWaitForFences() returns immediately since the fence is already signaled.
+        */
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+        if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphore) != VK_SUCCESS ||
+            vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphore) != VK_SUCCESS ||
+            vkCreateFence(device, &fenceInfo, nullptr, &inFlightFence) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create semaphores.");
+        }
+    }
+
     void initVulkan() 
     {
         createInstance();
@@ -1775,27 +1807,78 @@ private:
         createFramebuffers();
         createCommandPool();
         createCommandBuffer();
+        createSyncObjects();
     }
 
     /*
         Rendering a frame in Vulkan consists of a common set of steps:
 
         1. Wait for the previous frame to finish
-
         2. Acquire an image from the swap chain
-
         3. Record a command buffer which draws the scene onto that image
-
         4. Submit (execute) the recorded command buffer
-
         5. Return the finished image to the swap chain and present it on the surface
     */
     void drawFrame()
     {
-        
-    }
+        /*
+            takes an array of fences and waits on the host for either any or all of the fences to be signaled before returning. 
+            The VK_TRUE indicates that we want to wait for all fences, but in the case of a single one it doesn’t matter. We set the 
+            timeout parameter to the maximum value of a 64 bit unsigned integer, UINT64_MAX, which effectively disables the timeout.
+        */
+        vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
+        // reset the fence to the unsignaled state
+        vkResetFences(device, 1, &inFlightFence);
 
-    
+        uint32_t imageIndex;
+        /* 
+            Since the swap chain is an extension feature, we must use a function with the vk* KHR naming convention.
+            Parameters 4 and 5 are synchronization objects that are to be signaled when the presentation engine is finished 
+            using the image. That’s the point in time where we can start drawing to it.
+            The index refers to the VkImage in our swapChainImages array. We are going to use that index to pick the VkFrameBuffer.
+        */
+        vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+
+        /*
+            With the imageIndex specifying the swap chain image to use in hand, we can now record the command buffer. 
+            First, we call vkResetCommandBuffer on the command buffer to make sure it is able to be recorded.
+            The second parameter of vkResetCommandBuffer is a VkCommandBufferResetFlagBits flag. 
+            Since we don’t want to do anything special, we leave it as 0.
+        */
+        vkResetCommandBuffer(commandBuffer, 0);
+
+        recordCommandBuffer(commandBuffer, imageIndex);
+
+        // Configures queue submission and synchronization
+        VkSubmitInfo submitInfo {};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+        VkSemaphore waitSemaphores[] = { imageAvailableSemaphore };
+        VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
+        /*
+            The first three parameters specify which semaphores to wait on before execution begins and in which stage(s) of the 
+            pipeline to wait. We want to wait with writing colors to the image until it’s available, so we’re specifying the 
+            stage of the graphics pipeline that writes to the color attachment. That means that theoretically the implementation 
+            can already start executing our vertex shader and such while the image is not yet available. Each entry in the 
+            waitStages array corresponds to the semaphore with the same index in pWaitSemaphores.
+        */
+        submitInfo.waitSemaphoreCount = 1;
+        submitInfo.pWaitSemaphores = waitSemaphores;
+        submitInfo.pWaitDstStageMask = waitStages;
+        // These specify which command buffers to actually submit for execution. We simply submit the single command buffer we have.
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &commandBuffer;
+
+        VkSemaphore signalSemaphores[] = { renderFinishedSemaphore };
+        // These specify which semaphores to signal once the command buffer(s) have finished execution.
+        submitInfo.signalSemaphoreCount = 1;
+        submitInfo.pSignalSemaphores = signalSemaphores;
+
+        if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to submit draw commnd buffer.");
+        }
+    }
 
     void mainLoop() 
     {
@@ -1810,12 +1893,16 @@ private:
     // Note the reverse order of deletions based on dependencies
     void cleanup() 
     {
+        vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
+        vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
+        vkDestroyFence(device, inFlightFence, nullptr);
         vkDestroyCommandPool(device, commandPool, nullptr);
 
         for (auto framebuffer : swapChainFramebuffers)
         {
             vkDestroyFramebuffer(device, framebuffer, nullptr);
         }
+
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyRenderPass(device, renderPass, nullptr);
@@ -1824,6 +1911,7 @@ private:
         {
             vkDestroyImageView(device, imageView, nullptr); // Unlike images, the image views were explicitly.
         }
+
         vkDestroySwapchainKHR(device, swapChain, nullptr);
         // Logical devices don’t interact directly with instances, which is why instance is not included as a parameter.
         vkDestroyDevice(device, nullptr);
