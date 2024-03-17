@@ -16,6 +16,13 @@
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
+/*
+    We choose the number 2 because we don’t want the CPU to get too far ahead of the GPU. With 2 frames in flight, the CPU and the GPU can 
+    be working on their own tasks at the same time. If the CPU finishes early, it will wait till the GPU finishes rendering before submitting 
+    more work. With 3 or more frames in flight, the CPU could get ahead of the GPU, adding frames of latency. Generally, extra latency isn’t 
+    desired. But giving the application control over the number of frames in flight is another example of Vulkan being explicit.
+*/
+const int MAX_FRAMES_IN_FLIGHT = 2;
 
 // All of the useful standard validation is bundled into a layer included in the SDK:
 const std::vector<const char*> validationLayers = { "VK_LAYER_KHRONOS_validation" };
@@ -245,10 +252,11 @@ private:
     VkPipeline graphicsPipeline;
     std::vector<VkFramebuffer> swapChainFramebuffers;
     VkCommandPool commandPool;
-    VkCommandBuffer commandBuffer; // automatically freed when its command pool is destroyed
-    VkSemaphore imageAvailableSemaphore;
-    VkSemaphore renderFinishedSemaphore;
-    VkFence inFlightFence;
+    std::vector<VkCommandBuffer> commandBuffers; // automatically freed when their command pool is destroyed
+    std::vector<VkSemaphore> imageAvailableSemaphores;
+    std::vector<VkSemaphore> renderFinishedSemaphores;
+    std::vector<VkFence> inFlightFences;
+    uint32_t currentFrame = 0; // To use the right objects every frame, we need to keep track of the current frame.
 
     void initWindow() 
     {
@@ -1649,8 +1657,10 @@ private:
         }
     }
 
-    void createCommandBuffer()
+    void createCommandBuffers()
     {
+        commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+
         VkCommandBufferAllocateInfo allocInfo {};
 
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -1666,9 +1676,9 @@ private:
             imagine that it’s helpful to reuse common operations from primary command buffers.
         */
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = 1; // allocate a single command buffer from the command pool
+        allocInfo.commandBufferCount = (uint32_t)commandBuffers.size(); // allocate command buffers from the command pool
 
-        if (vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer) != VK_SUCCESS)
+        if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS)
         {
             throw std::runtime_error("Failed to allocate command buffer(s).");
         }
@@ -1806,6 +1816,10 @@ private:
     */
     void createSyncObjects()
     {
+        imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+        renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+        inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
+
         // Future versions of the Vulkan API or extensions may add functionality for the flags and pNext parameters.
         VkSemaphoreCreateInfo semaphoreInfo {};
         semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -1820,11 +1834,14 @@ private:
         */
         fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT; // unblocked initially to allow first draw
 
-        if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphore) != VK_SUCCESS ||
-            vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphore) != VK_SUCCESS ||
-            vkCreateFence(device, &fenceInfo, nullptr, &inFlightFence) != VK_SUCCESS)
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) 
         {
-            throw std::runtime_error("Failed to create semaphores.");
+            if (vkCreateSemaphore(device, &semaphoreInfo, nullptr, &imageAvailableSemaphores[i]) != VK_SUCCESS ||
+                vkCreateSemaphore(device, &semaphoreInfo, nullptr, &renderFinishedSemaphores[i]) != VK_SUCCESS ||
+                vkCreateFence(device, &fenceInfo, nullptr, &inFlightFences[i]) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to create synchronization objects for a frame.");
+            }
         }
     }
 
@@ -1841,7 +1858,7 @@ private:
         createGraphicsPipeline();
         createFramebuffers();
         createCommandPool();
-        createCommandBuffer();
+        createCommandBuffers();
         createSyncObjects();
     }
 
@@ -1853,6 +1870,8 @@ private:
         3. Record a command buffer which draws the scene onto that image
         4. Submit (execute) the recorded command buffer
         5. Return the finished image to the swap chain and present it on the surface
+
+        All GPU commands are executed asynchronously.
     */
     void drawFrame()
     {
@@ -1861,9 +1880,9 @@ private:
             The VK_TRUE indicates that we want to wait for all fences, but in the case of a single one it doesn’t matter. We set the 
             timeout parameter to the maximum value of a 64 bit unsigned integer, UINT64_MAX, which effectively disables the timeout.
         */
-        vkWaitForFences(device, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
+        vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
         // reset the fence to the unsignaled (blocked) state
-        vkResetFences(device, 1, &inFlightFence);
+        vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
         uint32_t imageIndex;
         /* 
@@ -1872,7 +1891,7 @@ private:
             engine is finished using the image. That’s the point in time where we can start drawing to it.
             The index refers to the VkImage in our swapChainImages array. We are going to use that index to pick the VkFrameBuffer.
         */
-        vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+        vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
 
         /*
             With the imageIndex specifying the swap chain image to use in hand, we can now record the command buffer. 
@@ -1880,15 +1899,15 @@ private:
             The second parameter of vkResetCommandBuffer is a VkCommandBufferResetFlagBits flag. 
             Since we don’t want to do anything special, we leave it as 0.
         */
-        vkResetCommandBuffer(commandBuffer, 0);
+        vkResetCommandBuffer(commandBuffers[currentFrame], 0);
 
-        recordCommandBuffer(commandBuffer, imageIndex); // every frame
+        recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
         // Configures queue submission and synchronization
         VkSubmitInfo submitInfo {};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
-        VkSemaphore waitSemaphores[] = { imageAvailableSemaphore };
+        VkSemaphore waitSemaphores[] = { imageAvailableSemaphores[currentFrame] };
         VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
         /*
             The first three parameters specify which semaphores to wait on before execution begins and in which stage(s) of the 
@@ -1900,11 +1919,12 @@ private:
         submitInfo.waitSemaphoreCount = 1;
         submitInfo.pWaitSemaphores = waitSemaphores;
         submitInfo.pWaitDstStageMask = waitStages;
+
         // These specify which command buffers to actually submit for execution. We simply submit the single command buffer we have.
         submitInfo.commandBufferCount = 1;
-        submitInfo.pCommandBuffers = &commandBuffer;
+        submitInfo.pCommandBuffers = &commandBuffers[currentFrame];
 
-        VkSemaphore signalSemaphores[] = { renderFinishedSemaphore };
+        VkSemaphore signalSemaphores[] = { renderFinishedSemaphores[currentFrame] };
         // These specify which semaphores to signal once the command buffer(s) have finished execution.
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = signalSemaphores;
@@ -1915,7 +1935,7 @@ private:
             This allows us to know when it is safe for the command buffer to be reused, thus we want to give it inFlightFence. 
             Now on the next frame, the CPU will wait for this command buffer to finish executing before it records new commands into it.
         */
-        if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS)
+        if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS)
         {
             throw std::runtime_error("Failed to submit draw commnd buffer.");
         }
@@ -1944,6 +1964,9 @@ private:
 
         // Submits the request to present an image to the swap chain
         vkQueuePresentKHR(presentQueue, &presentInfo);
+
+        // By using the modulo (%) operator, we ensure that the frame index loops around after every MAX_FRAMES_IN_FLIGHT enqueued frames.
+        currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     void mainLoop() 
@@ -1958,8 +1981,8 @@ private:
         /*
             All of the operations in drawFrame are asynchronous. That means that when we exit the loop in mainLoop, 
             drawing and presentation operations may still be going on. Cleaning up resources while that is happening is a bad idea.
-
             To fix that problem, wait for the logical device to finish operations before exiting mainLoop and destroying the window.
+            You can also wait for operations in a specific command queue to be finished with vkQueueWaitIdle.
         */
         vkDeviceWaitIdle(device);
     }
@@ -1967,9 +1990,13 @@ private:
     // Note the reverse order of deletions based on dependencies
     void cleanup() 
     {
-        vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
-        vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
-        vkDestroyFence(device, inFlightFence, nullptr);
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) 
+        {
+            vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
+            vkDestroySemaphore(device, renderFinishedSemaphores[i], nullptr);
+            vkDestroyFence(device, inFlightFences[i], nullptr);
+        }
+
         vkDestroyCommandPool(device, commandPool, nullptr);
 
         for (auto framebuffer : swapChainFramebuffers)
