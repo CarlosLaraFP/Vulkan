@@ -257,6 +257,20 @@ private:
     std::vector<VkSemaphore> renderFinishedSemaphores;
     std::vector<VkFence> inFlightFences;
     uint32_t currentFrame = 0; // To use the right objects every frame, we need to keep track of the current frame.
+    bool framebufferResized = false; // window resized
+
+    /*
+        The reason that we’re creating a static function as a callback is because GLFW doesn't know how to 
+        properly call a member function with the right this pointer to our HelloTriangleApplication instance.
+        However, we do get a reference to the GLFWwindow in the callback and there is another GLFW function 
+        that allows you to store an arbitrary pointer inside of it: glfwSetWindowUserPointer
+    */
+    static void framebufferResizeCallback(GLFWwindow* window, int width, int height)
+    {
+        auto app = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+
+        app->framebufferResized = true;
+    }
 
     void initWindow() 
     {
@@ -267,8 +281,8 @@ private:
 
         // Because GLFW was originally designed to create an OpenGL context, we need to tell it to not create an OpenGL context.
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        // Because handling resized windows takes special care that we’ll look into later, disable it for now.
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        // Handling resized windows takes special care
+        //glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 
         // The 4th parameter allows you to optionally specify a monitor to open the window on and the last parameter is only relevant to OpenGL.
         window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);
@@ -279,6 +293,9 @@ private:
 
             throw std::runtime_error("Window could not be created.");
         }
+
+        glfwSetWindowUserPointer(window, this); // this value can now be retrieved from within the callback
+        glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
     }
 
     std::vector<const char*> getRequiredExtensions()
@@ -1676,7 +1693,7 @@ private:
             imagine that it’s helpful to reuse common operations from primary command buffers.
         */
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandBufferCount = (uint32_t)commandBuffers.size(); // allocate command buffers from the command pool
+        allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size()); // allocate command buffers from the command pool
 
         if (vkAllocateCommandBuffers(device, &allocInfo, commandBuffers.data()) != VK_SUCCESS)
         {
@@ -1845,6 +1862,37 @@ private:
         }
     }
 
+    void cleanupSwapChain()
+    {
+        for (auto framebuffer : swapChainFramebuffers) 
+        {
+            vkDestroyFramebuffer(device, framebuffer, nullptr);
+        }
+
+        for (auto imageView : swapChainImageViews) 
+        {
+            vkDestroyImageView(device, imageView, nullptr);
+        }
+
+        vkDestroySwapchainKHR(device, swapChain, nullptr);
+    }
+
+    void recreateSwapChain()
+    {
+        vkDeviceWaitIdle(device);
+
+        cleanupSwapChain();
+
+        createSwapChain();
+        createImageViews(); // need to be recreated because they are based directly on the swap chain images
+        /*
+            Note that we don’t recreate the renderpass here for simplicity. In theory it can be possible for the swap chain image format 
+            to change during an applications' lifetime, e.g. when moving a window from an standard range to an high dynamic range monitor. 
+            This may require the application to recreate the renderpass to make sure the change between dynamic ranges is properly reflected.
+        */
+        createFramebuffers(); // need to be recreated because they directly depend on the swap chain images
+    }
+
     void initVulkan() 
     {
         createInstance();
@@ -1881,8 +1929,6 @@ private:
             timeout parameter to the maximum value of a 64 bit unsigned integer, UINT64_MAX, which effectively disables the timeout.
         */
         vkWaitForFences(device, 1, &inFlightFences[currentFrame], VK_TRUE, UINT64_MAX);
-        // reset the fence to the unsignaled (blocked) state
-        vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
         uint32_t imageIndex;
         /* 
@@ -1890,8 +1936,31 @@ private:
             Parameters 4 and 5 are synchronization objects that are to be signaled (unblocked) when the presentation 
             engine is finished using the image. That’s the point in time where we can start drawing to it.
             The index refers to the VkImage in our swapChainImages array. We are going to use that index to pick the VkFrameBuffer.
+            UINT64_MAX means the function will block indefinitely until an image becomes available.
         */
-        vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+        VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
+
+        /*
+            The vkAcquireNextImageKHR and vkQueuePresentKHR functions can return the following special values to indicate this.
+
+            VK_ERROR_OUT_OF_DATE_KHR: The swap chain has become incompatible with the surface 
+            and can no longer be used for rendering. Usually happens after a window resize.
+
+            VK_SUBOPTIMAL_KHR: The swap chain can still be used to successfully present 
+            to the surface, but the surface properties are no longer matched exactly.
+        */
+        if (result == VK_ERROR_OUT_OF_DATE_KHR)
+        {
+            recreateSwapChain();
+            return;
+        }
+        else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+        {
+            throw std::runtime_error("Failed to acquire swap chain image.");
+        }
+
+        // Reset the fence to the unsignaled (blocked) state only if we are submitting work (avoids deadlock).
+        vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
         /*
             With the imageIndex specifying the swap chain image to use in hand, we can now record the command buffer. 
@@ -1963,7 +2032,22 @@ private:
         presentInfo.pResults = nullptr; // Optional
 
         // Submits the request to present an image to the swap chain
-        vkQueuePresentKHR(presentQueue, &presentInfo);
+        result = vkQueuePresentKHR(presentQueue, &presentInfo);
+
+        // In this case we will also recreate the swap chain if it is suboptimal because we want the best possible result.
+        if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || framebufferResized) 
+        {
+            /*
+                It is important to do this after vkQueuePresentKHR to ensure that the semaphores are in 
+                a consistent state, otherwise a signaled semaphore may never be properly waited upon.
+            */
+            framebufferResized = false;
+            recreateSwapChain();
+        }
+        else if (result != VK_SUCCESS) 
+        {
+            throw std::runtime_error("Failed to present swap chain image.");
+        }
 
         // By using the modulo (%) operator, we ensure that the frame index loops around after every MAX_FRAMES_IN_FLIGHT enqueued frames.
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
@@ -1990,6 +2074,12 @@ private:
     // Note the reverse order of deletions based on dependencies
     void cleanup() 
     {
+        cleanupSwapChain();
+
+        vkDestroyPipeline(device, graphicsPipeline, nullptr);
+        vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
+        vkDestroyRenderPass(device, renderPass, nullptr);
+
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) 
         {
             vkDestroySemaphore(device, imageAvailableSemaphores[i], nullptr);
@@ -1998,22 +2088,6 @@ private:
         }
 
         vkDestroyCommandPool(device, commandPool, nullptr);
-
-        for (auto framebuffer : swapChainFramebuffers)
-        {
-            vkDestroyFramebuffer(device, framebuffer, nullptr);
-        }
-
-        vkDestroyPipeline(device, graphicsPipeline, nullptr);
-        vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-        vkDestroyRenderPass(device, renderPass, nullptr);
-
-        for (auto imageView : swapChainImageViews)
-        {
-            vkDestroyImageView(device, imageView, nullptr); // Unlike images, the image views were explicitly.
-        }
-
-        vkDestroySwapchainKHR(device, swapChain, nullptr);
         // Logical devices don’t interact directly with instances, which is why instance is not included as a parameter.
         vkDestroyDevice(device, nullptr);
 
