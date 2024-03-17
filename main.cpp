@@ -243,6 +243,7 @@ private:
     VkRenderPass renderPass;
     VkPipelineLayout pipelineLayout;
     VkPipeline graphicsPipeline;
+    std::vector<VkFramebuffer> swapChainFramebuffers;
 
     void initWindow() 
     {
@@ -1527,6 +1528,43 @@ private:
         vkDestroyShaderModule(device, vertexModule, nullptr);
     }
 
+    /*
+        A framebuffer object references all of the VkImageView objects that represent the attachments. 
+        In our case that will be only a single one: the color attachment. However, the image that we have to use for the attachment 
+        depends on which image the swap chain returns when we retrieve one for presentation. That means that we have to create a 
+        framebuffer for all of the images in the swap chain and use the one that corresponds to the retrieved image at drawing time.
+        Render pass = the how and Framebuffer = the what
+    */
+    void createFramebuffers()
+    {
+        swapChainFramebuffers.resize(swapChainImageViews.size());
+
+        for (size_t i = 0; i < swapChainImageViews.size(); i++)
+        {
+            VkImageView attachments[] =
+            {
+                swapChainImageViews[i]
+            };
+
+            VkFramebufferCreateInfo framebufferInfo {};
+
+            framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+            // You can only use a framebuffer with the render passes that it is compatible with, 
+            // which roughly means that they use the same number and type of attachments.
+            framebufferInfo.renderPass = renderPass;
+            framebufferInfo.attachmentCount = 1;
+            framebufferInfo.pAttachments = attachments;
+            framebufferInfo.width = swapChainExtent.width;
+            framebufferInfo.height = swapChainExtent.height;
+            framebufferInfo.layers = 1; // our swap chain images are single images
+
+            if (vkCreateFramebuffer(device, &framebufferInfo, nullptr, &swapChainFramebuffers[i]) != VK_SUCCESS)
+            {
+                throw std::runtime_error("Failed to create framebuffer for swap chain image view.");
+            }
+        }
+    }
+
     void initVulkan() 
     {
         createInstance();
@@ -1538,6 +1576,7 @@ private:
         createImageViews();
         createRenderPass();
         createGraphicsPipeline();
+        createFramebuffers();
     }
 
     void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) 
@@ -1577,10 +1616,13 @@ private:
         }
     }
 
+    // Note the reverse order of deletions based on dependencies
     void cleanup() 
     {
-        // Note the reverse order of deletions based on dependencies
-
+        for (auto framebuffer : swapChainFramebuffers)
+        {
+            vkDestroyFramebuffer(device, framebuffer, nullptr);
+        }
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyRenderPass(device, renderPass, nullptr);
@@ -1589,7 +1631,6 @@ private:
         {
             vkDestroyImageView(device, imageView, nullptr); // Unlike images, the image views were explicitly.
         }
-
         vkDestroySwapchainKHR(device, swapChain, nullptr);
         // Logical devices don’t interact directly with instances, which is why instance is not included as a parameter.
         vkDestroyDevice(device, nullptr);
