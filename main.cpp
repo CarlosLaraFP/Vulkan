@@ -1879,6 +1879,19 @@ private:
 
     void recreateSwapChain()
     {
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(window, &width, &height);
+        /*
+            There is another case where a swap chain may become out of date and that is a special kind of window resizing: 
+            window minimization. This case is special because it will result in a frame buffer size of 0.
+            We handle this by pausing until the window is in the foreground again.
+        */
+        while (width == 0 && height == 0)
+        {
+            glfwWaitEvents();
+            glfwGetFramebufferSize(window, &width, &height);
+        }
+
         vkDeviceWaitIdle(device);
 
         cleanupSwapChain();
@@ -1886,7 +1899,7 @@ private:
         createSwapChain();
         createImageViews(); // need to be recreated because they are based directly on the swap chain images
         /*
-            Note that we don’t recreate the renderpass here for simplicity. In theory it can be possible for the swap chain image format 
+            Note that we don’t recreate the render pass here for simplicity. In theory it can be possible for the swap chain image format 
             to change during an applications' lifetime, e.g. when moving a window from an standard range to an high dynamic range monitor. 
             This may require the application to recreate the renderpass to make sure the change between dynamic ranges is properly reflected.
         */
