@@ -39,13 +39,6 @@ const std::vector<const char*> validationLayers = { "VK_LAYER_KHRONOS_validation
 */
 const std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME }; // macro helps the compiler catch misspellings
 
-const std::vector<Vertex> vertices =
-{
-    {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
-};
-
 // The NDEBUG macro is part of the C++ standard and means "not debug"
 #ifdef NDEBUG
     const bool enableValidationLayers = false;
@@ -226,6 +219,7 @@ struct SwapChainSupportDetails
     std::vector<VkPresentModeKHR> presentModes;
 };
 
+// Interleaving vertex attributes
 struct Vertex
 {
     glm::vec2 position;
@@ -332,6 +326,13 @@ private:
     std::vector<VkFence> inFlightFences;
     uint32_t currentFrame = 0; // To use the right objects every frame, we need to keep track of the current frame.
     bool framebufferResized = false; // window resized
+    // Position and color values are combined into one array of vertices. This is known as interleaving vertex attributes.
+    const std::vector<Vertex> vertices =
+    {
+        {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+        {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+        {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+    };
 
     /*
         The reason that we’re creating a static function as a callback is because GLFW doesn't know how to 
@@ -1384,6 +1385,28 @@ private:
 
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocInfo.allocationSize = memoryRequirements.size;
+        /*
+            When a GPU memory heap is flagged as host coherent (VK_MEMORY_PROPERTY_HOST_COHERENT_BIT), it indicates a specific behavior regarding the coherency between memory accesses by the CPU (host) and the GPU (device). This property affects how memory writes made by the host are visible to the device and vice versa, especially in the context of mapped memory regions. Here’s what it entails:
+
+            Coherency Without Explicit Flushes or Invalidates
+            Automatic Visibility: Changes made to a mapped memory region on the CPU side are automatically visible to the GPU, and changes made by the GPU are automatically visible to the CPU. This means that, under normal circumstances, you do not need to explicitly flush changes from the host to the device or invalidate them on the host to see changes made by the device.
+            Synchronization Still Required: While host coherency ensures visibility of the writes across the CPU and GPU, it does not eliminate the need for proper synchronization to manage the order of operations across the CPU and GPU. For instance, you still need to use fences, semaphores, or barriers to ensure that the GPU has finished reading or writing to a memory region before the CPU starts its operations, or vice versa.
+            Impact on Performance and Usage
+            Performance Considerations: Although host coherency simplifies some aspects of memory management by removing the need for explicit flushes and invalidations, it may come with performance implications. The automatic maintenance of coherency can introduce overheads, as the hardware or driver might need to perform additional operations to ensure that memory views are consistent between the host and the device.
+            Usage Scenario: Host coherent memory is particularly useful for scenarios where the application frequently updates data that the GPU consumes, such as dynamic uniform buffers or frequently updated vertex buffers. It simplifies code by removing the need for explicit memory management calls to maintain visibility.
+            Understanding the Trade-offs
+            Using host coherent memory effectively requires understanding the trade-offs between ease of use and potential performance impacts. For applications with intensive memory update patterns and synchronization requirements, the benefits of host coherency in simplifying development might outweigh the performance considerations. However, for performance-critical applications, it's important to profile and test different memory properties to find the optimal balance between performance and programming convenience.
+
+            In summary, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT simplifies memory management between the CPU and GPU by ensuring automatic visibility of memory operations without the need for explicit flush or invalidate commands. However, developers must still handle synchronization explicitly and consider the potential performance impacts of using host coherent memory.
+
+            vkFlushMappedMemoryRanges:
+            When you write to a mapped memory region on the host, those writes might reside in the CPU's cache and not be immediately visible to the device. vkFlushMappedMemoryRanges is used to ensure that any writes made to the mapped memory regions are flushed from the host cache and made visible to the device. This operation is crucial for memory regions without the VK_MEMORY_PROPERTY_HOST_COHERENT_BIT because, without it, there's no guarantee that the device will see the updated data when it tries to access the memory.
+            Usage: Call vkFlushMappedMemoryRanges after writing to a mapped memory region and before any device access (such as GPU read operations) to ensure that the writes are visible to the device.
+            
+            vkInvalidateMappedMemoryRanges:
+            Conversely, when the device writes to memory that the host plans to read, those writes may not be immediately visible to the host due to similar coherency issues. vkInvalidateMappedMemoryRanges is used to invalidate any cached data in the mapped memory regions on the host, ensuring that the host reads the most recent data written by the device. This operation is necessary for memory regions that do not automatically maintain coherency between host and device accesses.
+            Usage: Call vkInvalidateMappedMemoryRanges before reading from a mapped memory region on the host if the device has written to that memory, to ensure that the host sees the latest changes made by the device.
+        */
         allocInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 
         if (vkAllocateMemory(device, &allocInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS)
@@ -1394,9 +1417,49 @@ private:
         /*
             If memory allocation was successful, then we can now associate this memory with the buffer.
             The fourth parameter is the offset within the region of memory. Since this memory is allocated specifically for this the vertex 
-            buffer, the offset is simply 0. If the offset is non-zero, then it is required to be divisible by memRequirements.alignment.
+            buffer, the offset is simply 0. If the offset is non-zero, then it is required to be divisible by memoryRequirements.alignment.
         */
         vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+
+        void* data;
+        /*
+            Memory objects created with vkAllocateMemory are not directly host (CPU) accessible.
+            Memory objects created with the memory property VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT are considered mappable. 
+            Memory objects must be mappable in order to be successfully mapped on the host.
+
+            Map the buffer memory into CPU accessible memory.
+            This function allows us to access a region of the specified memory resource defined by an offset and size. 
+            The offset and size here are 0 and bufferInfo.size, respectively. It is also possible to specify the special 
+            value VK_WHOLE_SIZE to map all of the memory. The second to last parameter can be used to specify flags, 
+            but there aren’t any available yet in the current API. It must be set to the value 0. 
+            The last parameter is the host virtual address pointer to a region of a mappable memory object.
+        */
+        vkMapMemory(device, vertexBufferMemory, 0, bufferInfo.size, 0, &data);
+        // Copy the vertex data to the buffer
+        memcpy(data, vertices.data(), (size_t)bufferInfo.size);
+        /*
+            Caching: Modern CPUs use caches to improve access times to frequently used data. When you write data to a memory location that is mapped to device memory (like GPU memory), the data might first be written to a cache in the CPU. Depending on the cache write policy (write-back vs. write-through), the data might not be immediately written back to the actual device memory. This caching can lead to a situation where the data appears to be written from the perspective of the CPU, but has not yet been physically transferred to the device memory.
+
+            Memory Coherency: Memory coherency refers to the consistency of data stored in different caches or memory locations. In the context of CPU and GPU operations, it's important that both processors view consistent states of memory. However, without explicit synchronization, the CPU's view of the memory (after writing data) might differ from the GPU's view (which reads the data for rendering or computation).
+
+            Vulkan provides explicit control over memory operations, including synchronization. When you map device memory using vkMapMemory, Vulkan offers no guarantees about the visibility of writes to this memory across different caches and memory systems.
+
+            Delayed Copies: Because of caching mechanisms, the CPU's writes to the mapped memory might not be immediately reflected in the device memory. This delay can be due to the write-back caching policy, where writes are accumulated in the cache and flushed to the main memory at a later time.
+
+            Visibility of Writes: Even after the data is eventually written to the device memory, there's no guarantee that the GPU will see the updated data immediately. This lack of visibility is due to the absence of memory barriers or explicit cache flushes/invalidation commands that ensure memory coherency between CPU and GPU operations.
+
+            To address these issues, Vulkan provides mechanisms to ensure data coherency:
+
+            Memory Barriers: Vulkan allows you to use memory barriers to synchronize access to resources and ensure that memory writes are visible across different stages of the pipeline. A memory barrier can be used after copying data to ensure that subsequent operations (like shader reads) see the updated data.
+
+            Flushes and Invalidations: For host-visible memory types that do not guarantee coherency (VK_MEMORY_PROPERTY_HOST_COHERENT_BIT not set), applications need to explicitly flush writes to or invalidate reads from the mapped memory regions using vkFlushMappedMemoryRanges and vkInvalidateMappedMemoryRanges, respectively.
+        */
+        vkUnmapMemory(device, vertexBufferMemory);
+        /*
+            Flushing memory ranges or using a coherent memory heap means that the driver will be aware of our writes to the buffer, but it 
+            doesn’t mean that they are actually visible on the GPU yet. The transfer of data to the GPU is an operation that happens in the 
+            background and the specification simply tells us that it is guaranteed to be complete as of the next call to vkQueueSubmit.
+        */
     }
 
     /*
@@ -1982,18 +2045,20 @@ private:
         
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
+        VkBuffer vertexBuffers[] = { vertexBuffer };
+        VkDeviceSize offsets[] = { 0 };
+
+        vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
+
         /*
             Now we are ready to issue the draw command for the triangle.
         
             vertexCount: Even though we don’t have a vertex buffer, we technically still have 3 vertices to draw.
-
             instanceCount: Used for instanced rendering, use 1 if you’re not doing that.
-
             firstVertex: Used as an offset into the vertex buffer, defines the lowest value of gl_VertexIndex.
-
             firstInstance: Used as an offset for instanced rendering, defines the lowest value of gl_InstanceIndex.
         */
-        vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+        vkCmdDraw(commandBuffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
 
         vkCmdEndRenderPass(commandBuffer);
 
