@@ -316,6 +316,8 @@ private:
     VkRenderPass renderPass;
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
+    VkBuffer indexBuffer;
+    VkDeviceMemory indexBufferMemory;
     VkPipelineLayout pipelineLayout;
     VkPipeline graphicsPipeline;
     std::vector<VkFramebuffer> swapChainFramebuffers;
@@ -329,10 +331,13 @@ private:
     // Position and color values are combined into one array of vertices. This is known as interleaving vertex attributes.
     const std::vector<Vertex> vertices =
     {
-        {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
-        {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+        {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+        {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
+        {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
     };
+    // The top-left corner is red, top-right is green, bottom-right is blue and the bottom-left is white.
+    const std::vector<uint16_t> indices = { 0, 1, 2, 2, 3, 0 }; // uint16_t because we are using less than 65,535 unique vertices
 
     /*
         The reason that we’re creating a static function as a callback is because GLFW doesn't know how to 
@@ -1403,6 +1408,15 @@ private:
         */
         allocInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, properties);
 
+        /*
+            In a real world application we are not supposed to call vkAllocateMemory for every individual buffer. The maximum number of 
+            simultaneous memory allocations is limited by the maxMemoryAllocationCount physical device limit, which may be as low as 4096 
+            even on high end hardware like an NVIDIA GTX 1080. The right way to allocate memory for a large number of objects at the same 
+            time is to create a custom allocator that splits up a single allocation among many different objects by using the offset 
+            parameters that we’ve seen in many functions. We can either implement such an allocator ourselves, or use the 
+            VulkanMemoryAllocator library provided by the GPUOpen initiative. However, for this tutorial it’s okay to use 
+            a separate allocation for every resource because we won’t come close to hitting any of these limits for now.
+        */
         if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) 
         {
             throw std::runtime_error("Failed to allocate buffer memory.");
@@ -1557,6 +1571,27 @@ private:
             the vertex buffer usage flag. Now we need to copy the contents from the staging buffer to the device local buffer:
         */
         copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
+
+        vkDestroyBuffer(device, stagingBuffer, nullptr);
+        vkFreeMemory(device, stagingBufferMemory, nullptr);
+    }
+
+    void createIndexBuffer() 
+    {
+        VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingBufferMemory;
+        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+
+        void* data;
+        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+        memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
+        vkUnmapMemory(device, stagingBufferMemory);
+
+        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
+
+        copyBuffer(stagingBuffer, indexBuffer, bufferSize);
 
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
@@ -2149,18 +2184,17 @@ private:
         VkBuffer vertexBuffers[] = { vertexBuffer };
         VkDeviceSize offsets[] = { 0 };
 
-        // binds vertex buffers to a command buffer for use in subsequent drawing commands
+        // binds buffers to a command buffer for use in subsequent drawing commands
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-
+        vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16); // we can only have a single index buffer
         /*
-            Now we are ready to issue the draw command for the triangle.
-        
-            vertexCount: Even though we don’t have a vertex buffer, we technically still have 3 vertices to draw.
-            instanceCount: Used for instanced rendering, use 1 if you’re not doing that.
-            firstVertex: Used as an offset into the vertex buffer, defines the lowest value of gl_VertexIndex.
-            firstInstance: Used as an offset for instanced rendering, defines the lowest value of gl_InstanceIndex.
+            The first two parameters specify the number of indices and the number of instances. We’re not using instancing, so just 
+            specify 1 instance. The number of indices represents the number of vertices that will be passed to the vertex shader. 
+            The next parameter specifies an offset into the index buffer, using a value of 1 would cause the graphics card to 
+            start reading at the second index. The second to last parameter specifies an offset to add to the indices in the index buffer. 
+            The final parameter specifies an offset for instancing, which we’re not using.
         */
-        vkCmdDraw(commandBuffer, static_cast<uint32_t>(vertices.size()), 1, 0, 0);
+        vkCmdDrawIndexed(commandBuffer, static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
 
         vkCmdEndRenderPass(commandBuffer);
 
@@ -2264,6 +2298,7 @@ private:
         createFramebuffers();
         createCommandPool();
         createVertexBuffer(); // requires the command pool
+        createIndexBuffer();
         createCommandBuffers();
         createSyncObjects();
     }
@@ -2434,9 +2469,12 @@ private:
     {
         cleanupSwapChain();
 
-        vkDestroyBuffer(device, vertexBuffer, nullptr);
         // Memory that is bound to a buffer object may be freed once the buffer is no longer used.
+        vkDestroyBuffer(device, indexBuffer, nullptr);
+        vkFreeMemory(device, indexBufferMemory, nullptr);
+        vkDestroyBuffer(device, vertexBuffer, nullptr);
         vkFreeMemory(device, vertexBufferMemory, nullptr);
+
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyRenderPass(device, renderPass, nullptr);
