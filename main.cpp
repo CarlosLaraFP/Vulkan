@@ -266,7 +266,7 @@ struct Vertex
         // layout(location = 0) in vertex shader
         attributeDescriptions[0].location = 0;
         // the binding number which this attribute takes its data from
-        attributeDescriptions[0].binding = Vertex::getBindingDescription().binding;
+        attributeDescriptions[0].binding = 0;
         // the size and type of the vertex attribute data
         attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
         // byte offset of this attribute relative to the start of an element in the vertex input binding
@@ -274,7 +274,7 @@ struct Vertex
 
         // layout(location = 1) in vertex shader
         attributeDescriptions[1].location = 1;
-        attributeDescriptions[1].binding = Vertex::getBindingDescription().binding;
+        attributeDescriptions[1].binding = 0;
         attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT; // only integers can be unsigned
         attributeDescriptions[1].offset = offsetof(Vertex, color);
 
@@ -329,7 +329,7 @@ private:
     // Position and color values are combined into one array of vertices. This is known as interleaving vertex attributes.
     const std::vector<Vertex> vertices =
     {
-        {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+        {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
         {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
         {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
     };
@@ -1344,33 +1344,27 @@ private:
         throw std::runtime_error("Failed to find a suitable memory type.");
     }
 
-    /*
-        Buffers in Vulkan are regions of memory used for storing arbitrary data that can be read by the graphics card. 
-        They can be used to store vertex data, but they can also be used for many other purposes.
-        Buffers do not automatically allocate memory for themselves, so we must take care of memory management.
-    */
-    void createVertexBuffer()
+    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory)
     {
         /*
-            Separating the description of the data structure (VkBuffer) from the actual memory allocation (VkDeviceMemory) 
-            allows for more efficient memory usage. Multiple buffers can be bound to different regions of the same 
-            VkDeviceMemory allocation, reducing the overhead and fragmentation of memory allocations. 
+            Separating the description of the data structure (VkBuffer) from the actual memory allocation (VkDeviceMemory)
+            allows for more efficient memory usage. Multiple buffers can be bound to different regions of the same
+            VkDeviceMemory allocation, reducing the overhead and fragmentation of memory allocations.
             This is particularly useful for managing many small resources, such as uniform buffers.
-            Buffers are used to organize data in a way that is accessible by the GPU, but they do not themselves allocate memory. 
-            Instead, they define the structure, usage, and properties of the data storage, such as whether it will be used for 
+            Buffers are used to organize data in a way that is accessible by the GPU, but they do not themselves allocate memory.
+            Instead, they define the structure, usage, and properties of the data storage, such as whether it will be used for
             vertex input, as a storage buffer, or for other purposes.
         */
         VkBufferCreateInfo bufferInfo {};
         // queueFamilyIndexCount and pQueueFamilyIndices are ignored if sharingMode != VK_SHARING_MODE_CONCURRENT
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-        bufferInfo.size = sizeof(vertices[0]) * vertices.size(); // total size in bytes, not number of elements
-        bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT; // it is possible to specify multiple purposes using a bitwise or
-        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // access is exclusive to a single queue family at a time
-        bufferInfo.flags = 0; // used to configure sparse buffer memory (irrelevant for now; using default 0)
-        
-        if (vkCreateBuffer(device, &bufferInfo, nullptr, &vertexBuffer) != VK_SUCCESS)
+        bufferInfo.size = size;
+        bufferInfo.usage = usage;
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        if (vkCreateBuffer(device, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) 
         {
-            throw std::runtime_error("Failed to create vertex buffer.");
+            throw std::runtime_error("Failed to create buffer.");
         }
 
         /*
@@ -1379,9 +1373,9 @@ private:
             memoryTypeBits: Bit field of the memory types that are suitable for the buffer.
         */
         VkMemoryRequirements memoryRequirements;
-        vkGetBufferMemoryRequirements(device, vertexBuffer, &memoryRequirements);
+        vkGetBufferMemoryRequirements(device, buffer, &memoryRequirements);
 
-        VkMemoryAllocateInfo allocInfo {};
+        VkMemoryAllocateInfo allocInfo{};
 
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocInfo.allocationSize = memoryRequirements.size;
@@ -1402,24 +1396,42 @@ private:
             vkFlushMappedMemoryRanges:
             When you write to a mapped memory region on the host, those writes might reside in the CPU's cache and not be immediately visible to the device. vkFlushMappedMemoryRanges is used to ensure that any writes made to the mapped memory regions are flushed from the host cache and made visible to the device. This operation is crucial for memory regions without the VK_MEMORY_PROPERTY_HOST_COHERENT_BIT because, without it, there's no guarantee that the device will see the updated data when it tries to access the memory.
             Usage: Call vkFlushMappedMemoryRanges after writing to a mapped memory region and before any device access (such as GPU read operations) to ensure that the writes are visible to the device.
-            
+
             vkInvalidateMappedMemoryRanges:
             Conversely, when the device writes to memory that the host plans to read, those writes may not be immediately visible to the host due to similar coherency issues. vkInvalidateMappedMemoryRanges is used to invalidate any cached data in the mapped memory regions on the host, ensuring that the host reads the most recent data written by the device. This operation is necessary for memory regions that do not automatically maintain coherency between host and device accesses.
             Usage: Call vkInvalidateMappedMemoryRanges before reading from a mapped memory region on the host if the device has written to that memory, to ensure that the host sees the latest changes made by the device.
         */
-        allocInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        allocInfo.memoryTypeIndex = findMemoryType(memoryRequirements.memoryTypeBits, properties);
 
-        if (vkAllocateMemory(device, &allocInfo, nullptr, &vertexBufferMemory) != VK_SUCCESS)
+        if (vkAllocateMemory(device, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) 
         {
-            throw std::runtime_error("Failed to allocate vertex buffer memory.");
+            throw std::runtime_error("Failed to allocate buffer memory.");
         }
 
         /*
             If memory allocation was successful, then we can now associate this memory with the buffer.
-            The fourth parameter is the offset within the region of memory. Since this memory is allocated specifically for this the vertex 
+            The fourth parameter is the offset within the region of memory. Since this memory is allocated specifically for this the vertex
             buffer, the offset is simply 0. If the offset is non-zero, then it is required to be divisible by memoryRequirements.alignment.
         */
-        vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
+        vkBindBufferMemory(device, buffer, bufferMemory, 0);
+    }
+
+    /*
+        Buffers in Vulkan are regions of memory used for storing arbitrary data that can be read by the graphics card. 
+        They can be used to store vertex data, but they can also be used for many other purposes.
+        Buffers do not automatically allocate memory for themselves, so we must take care of memory management.
+    */
+    void createVertexBuffer()
+    {
+        VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+
+        createBuffer(
+            bufferSize,
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            vertexBuffer,
+            vertexBufferMemory
+        );
 
         void* data;
         /*
@@ -1434,9 +1446,9 @@ private:
             but there aren’t any available yet in the current API. It must be set to the value 0. 
             The last parameter is the host virtual address pointer to a region of a mappable memory object.
         */
-        vkMapMemory(device, vertexBufferMemory, 0, bufferInfo.size, 0, &data);
+        vkMapMemory(device, vertexBufferMemory, 0, bufferSize, 0, &data);
         // Copy the vertex data to the buffer
-        memcpy(data, vertices.data(), (size_t)bufferInfo.size);
+        memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
         /*
             Caching: Modern CPUs use caches to improve access times to frequently used data. When you write data to a memory location that is mapped to device memory (like GPU memory), the data might first be written to a cache in the CPU. Depending on the cache write policy (write-back vs. write-through), the data might not be immediately written back to the actual device memory. This caching can lead to a situation where the data appears to be written from the perspective of the CPU, but has not yet been physically transferred to the device memory.
 
@@ -1460,6 +1472,19 @@ private:
             doesn’t mean that they are actually visible on the GPU yet. The transfer of data to the GPU is an operation that happens in the 
             background and the specification simply tells us that it is guaranteed to be complete as of the next call to vkQueueSubmit.
         */
+
+        /*
+            The memory type that allows us to access the vertex buffer from the CPU may not be the most optimal memory type for the GPU 
+            itself to read from. The most optimal memory has the VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT flag and is usually not accessible 
+            by the CPU on dedicated graphics cards. We need to create two vertex buffers: One staging buffer in CPU accessible memory to 
+            upload the data from the vertex array, and the final vertex buffer in GPU local memory. We then use a buffer copy command to 
+            move the data from the staging buffer to the actual vertex buffer. The buffer copy command requires a queue family that 
+            supports transfer operations, which is indicated using VK_QUEUE_TRANSFER_BIT. Any queue family with VK_QUEUE_GRAPHICS_BIT or 
+            VK_QUEUE_COMPUTE_BIT capabilities already implicitly support VK_QUEUE_TRANSFER_BIT operations. The implementation is 
+            not required to explicitly list it in queueFlags in those cases.
+        */
+
+
     }
 
     /*
@@ -1562,10 +1587,10 @@ private:
             Attribute descriptions: type of the attributes passed to the vertex shader, which binding to load them from and at which offset
         */
         VkPipelineVertexInputStateCreateInfo vertexInputInfo {};
-        // Since we are hard coding the vertex data directly in the vertex shader, specify that there is no vertex data to load for now.
+        
         vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertexInputInfo.vertexBindingDescriptionCount = 1;
-        vertexInputInfo.pVertexBindingDescriptions = &bindingDescription; // could be an array with multiple
+        vertexInputInfo.pVertexBindingDescriptions = &bindingDescription; // could be an array with multiple bindings
         vertexInputInfo.vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size());
         vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
 
@@ -2045,9 +2070,11 @@ private:
         
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
+        // A graphics pipeline supports binding multiple buffers simultaneously (must match VkPipelineVertexInputStateCreateInfo)
         VkBuffer vertexBuffers[] = { vertexBuffer };
         VkDeviceSize offsets[] = { 0 };
 
+        // binds vertex buffers to a command buffer for use in subsequent drawing commands
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 
         /*
@@ -2158,10 +2185,11 @@ private:
         createSwapChain();
         createImageViews();
         createRenderPass();
+        createVertexBuffer();
         createGraphicsPipeline();
         createFramebuffers();
         createCommandPool();
-        createVertexBuffer();
+        //createVertexBuffer();
         createCommandBuffers();
         createSyncObjects();
     }
@@ -2262,7 +2290,7 @@ private:
         */
         if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFences[currentFrame]) != VK_SUCCESS)
         {
-            throw std::runtime_error("Failed to submit draw commnd buffer.");
+            throw std::runtime_error("Failed to submit draw command buffer.");
         }
 
         VkPresentInfoKHR presentInfo {};
