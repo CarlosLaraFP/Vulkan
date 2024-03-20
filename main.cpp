@@ -298,14 +298,33 @@ struct Vertex
     3. Bind the descriptor set during rendering
 
     We can exactly match the definition in the shader using data types in GLM. The data in the matrices is binary 
-    compatible with the way the shader expects it, so we can later just memcpy a UniformBufferObject to a VkBuffer.
+    compatible with the way the shader expects it, so we can just memcpy a UniformBufferObject to a VkBuffer.
 */
 struct UniformBufferObject 
 {
-    glm::mat4 model;
-    glm::mat4 view;
-    glm::mat4 projection;
+    alignas(16) glm::mat4 model;
+    alignas(16) glm::mat4 view;
+    alignas(16) glm::mat4 projection;
 };
+/*
+    Vulkan expects the data in our struct to be aligned in memory in a specific way, for example:
+
+    - Scalars have to be aligned by N (= 4 bytes given 32 bit floats).
+    - A vec2 must be aligned by 2N (= 8 bytes)
+    - A vec3 or vec4 must be aligned by 4N (= 16 bytes)
+    - A nested structure must be aligned by the base alignment of its members rounded up to a multiple of 16.
+    - A mat4 matrix must have the same alignment as a vec4.
+
+    You can find the full list of alignment requirements in the specification. 
+    The Vulkan specification and hardware requirements dictate specific alignment for types when interfacing with shaders.
+    The alignas specifier in C++ allows you to specify the alignment requirement of a variable or type. Alignment is a constraint on the 
+    address of an object in memory, dictating that the object's address must be a multiple of some byte value, which is the alignment. 
+    For instance, an alignment of 16 means that the starting memory address of the variable must be a multiple of 16 bytes.
+
+    Our shader with three mat4 fields already met the alignment requirements. As each mat4 is 4 x 4 x 4 = 64 bytes in size, 
+    model has an offset of 0, view has an offset of 64, and projection has an offset of 128. All of these are multiples of 16.
+    It's best practice to always be explicit about alignment.
+*/
 
 // A lot of information in Vulkan is passed through structs instead of function parameters.
 class HelloTriangleApplication 
