@@ -282,6 +282,23 @@ struct Vertex
     }
 };
 
+/*
+    A descriptor is a way for shaders to freely access resources like buffers and images.
+
+    1. Specify a descriptor set layout during pipeline creation
+    2. Allocate a descriptor set from a descriptor pool
+    3. Bind the descriptor set during rendering
+
+    We can exactly match the definition in the shader using data types in GLM. The data in the matrices is binary 
+    compatible with the way the shader expects it, so we can later just memcpy a UniformBufferObject to a VkBuffer.
+*/
+struct UniformBufferObject 
+{
+    glm::mat4 model;
+    glm::mat4 view;
+    glm::mat4 projection;
+};
+
 // A lot of information in Vulkan is passed through structs instead of function parameters.
 class HelloTriangleApplication 
 {
@@ -318,6 +335,10 @@ private:
     VkDeviceMemory vertexBufferMemory;
     VkBuffer indexBuffer;
     VkDeviceMemory indexBufferMemory;
+    std::vector<VkBuffer> uniformBuffers;
+    std::vector<VkDeviceMemory> uniformBuffersMemory;
+    std::vector<void*> uniformBuffersMapped;
+    VkDescriptorSetLayout descriptorSetLayout;
     VkPipelineLayout pipelineLayout;
     VkPipeline graphicsPipeline;
     std::vector<VkFramebuffer> swapChainFramebuffers;
@@ -1598,6 +1619,70 @@ private:
     }
 
     /*
+        We are going to copy new data to the uniform buffer every frame, so it doesn’t really make any sense to have a staging buffer. 
+        It would just add extra overhead in this case and likely degrade performance instead of improving it.
+
+        We should have multiple buffers because multiple frames may be in flight at the same time and we don’t want to update the buffer in 
+        preparation of the next frame while a previous one is still reading from it. Thus, we need to have as many uniform buffers as we 
+        have frames in flight, and write to a uniform buffer that is not currently being read by the GPU.
+    */
+    void createUniformBuffers()
+    {
+        VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+        uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+        uniformBuffersMemory.resize(MAX_FRAMES_IN_FLIGHT);
+        uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) 
+        {
+            createBuffer(
+                bufferSize, 
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, 
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+                uniformBuffers[i], 
+                uniformBuffersMemory[i]
+            );
+
+            /*
+                Get pointers to which we can write the data later on. The buffer stays mapped to this pointer for the application’s whole 
+                lifetime. This technique is called "persistent mapping" and works on all Vulkan implementations. Not having to map the 
+                buffer every time we need to update it increases performances, as mapping is not free.
+            */
+            vkMapMemory(device, uniformBuffersMemory[i], 0, bufferSize, 0, &uniformBuffersMapped[i]);
+        }
+    }
+
+    /*
+        We need to provide details about every descriptor binding used in the shaders for pipeline creation.
+    */
+    void createDescriptorSetLayout()
+    {
+        VkDescriptorSetLayoutBinding uboLayoutBinding {};
+        /*
+            It is possible for the shader variable to represent an array of uniform buffer objects, and descriptorCount specifies the number
+            of values in the array (i.e. specify a transformation for each of the bones in a skeleton for skeletal animation, etc).
+        */
+        uboLayoutBinding.binding = 0;
+        uboLayoutBinding.descriptorCount = 1;
+        uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; // can be a combination of VkShaderStageFlagBits values
+        uboLayoutBinding.pImmutableSamplers = nullptr; // only relevant for image sampling related descriptors
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo {};
+
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = &uboLayoutBinding; // could be multiple bindings if 2+ in [vertex] shader
+        // flags and pNext: not extending this structure
+
+        if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create descriptor set layout.");
+        }
+    }
+
+    /*
         Vulkan expects shader code to be passed as a pointer to uint32_t in the pCode field of the VkShaderModuleCreateInfo struct, 
         aligned to a 4-byte boundary, because shaders are consumed as an array of 32-bit words. This is because GPU hardware and the 
         SPIR-V shader bytecode format are designed to work with 32-bit instructions. In practice, this means that when you store shader 
@@ -1907,13 +1992,15 @@ private:
 
             These uniform values need to be specified during pipeline creation by creating a VkPipelineLayout object. 
             The structure also specifies push constants, which are another way of passing dynamic values to shaders.
-            Even though we won’t be using any of this yet, we are still required to create an empty pipeline layout.
+            We need to specify the descriptor set layout to tell Vulkan which descriptors the shaders will be using.
+            It’s possible to specify multiple descriptor set layouts here, even though a single one already includes 
+            all of the bindings, because of descriptor pools and descriptor sets.
         */
         VkPipelineLayoutCreateInfo pipelineLayoutInfo {};
-
+        // required even if the pipeline does not use any UBOs
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        pipelineLayoutInfo.setLayoutCount = 0; // Optional
-        pipelineLayoutInfo.pSetLayouts = nullptr; // Optional
+        pipelineLayoutInfo.setLayoutCount = 1;
+        pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
         pipelineLayoutInfo.pushConstantRangeCount = 0; // Optional
         pipelineLayoutInfo.pPushConstantRanges = nullptr; // Optional
 
@@ -2294,11 +2381,13 @@ private:
         createSwapChain();
         createImageViews();
         createRenderPass();
-        createGraphicsPipeline();
+        createDescriptorSetLayout();
+        createGraphicsPipeline(); // requires descriptor set layout
         createFramebuffers();
         createCommandPool();
-        createVertexBuffer(); // requires the command pool
+        createVertexBuffer(); // requires the command pool due to the memory transfer command
         createIndexBuffer();
+        createUniformBuffers();
         createCommandBuffers();
         createSyncObjects();
     }
@@ -2475,6 +2564,13 @@ private:
         vkDestroyBuffer(device, vertexBuffer, nullptr);
         vkFreeMemory(device, vertexBufferMemory, nullptr);
 
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++) 
+        {
+            vkDestroyBuffer(device, uniformBuffers[i], nullptr);
+            vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
+        }
+
+        vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
         vkDestroyRenderPass(device, renderPass, nullptr);

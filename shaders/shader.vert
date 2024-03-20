@@ -1,6 +1,14 @@
 #version 450
 //#extension GL_KHR_vulkan_glsl : enable
 
+// the model, view, and projection matrices are updated every frame (reference this binding in the descriptor set layout)
+layout(binding = 0) uniform UniformBufferObject
+{
+	mat4 model;
+	mat4 view;
+	mat4 projection;
+} ubo;
+
 // Vertex Attributes: properties that are specified per-vertex in the vertex buffer
 //
 // The layout(location = x) annotations assign indices to the inputs that we can later use to reference them. 
@@ -14,6 +22,13 @@ layout(location = 1) in vec3 inColor;
 layout(location = 0) out vec3 fragmentColor;
 
 void main() {
-	gl_Position = vec4(inPosition, 0.0, 1.0);
+	/*
+		Compute the final position in clip coordinates.
+		The last component of the clip coordinates may not be 1, which will result in a division when converted 
+		to the final normalized device coordinates on the screen. This is used in perspective projection as the 
+		perspective division and is essential for making closer objects look larger than objects that are further away.
+	*/
+	gl_Position = ubo.projection * ubo.view * ubo.model * vec4(inPosition, 0.0, 1.0);
+	
 	fragmentColor = inColor;
 }
