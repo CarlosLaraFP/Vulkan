@@ -1613,14 +1613,29 @@ private:
 
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingBufferMemory;
-        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, stagingBuffer, stagingBufferMemory);
+
+        createBuffer(
+            bufferSize, 
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, 
+            stagingBuffer, 
+            stagingBufferMemory
+        );
 
         void* data;
         vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
+
         memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
+
         vkUnmapMemory(device, stagingBufferMemory);
 
-        createBuffer(bufferSize, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, indexBuffer, indexBufferMemory);
+        createBuffer(
+            bufferSize, 
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT, 
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 
+            indexBuffer, 
+            indexBufferMemory
+        );
 
         copyBuffer(stagingBuffer, indexBuffer, bufferSize);
 
@@ -2011,9 +2026,13 @@ private:
             The cullMode variable determines the type of face culling to use. You can disable culling, 
             cull the front faces, cull the back faces or both. The frontFace variable specifies the 
             vertex order for faces to be considered front-facing and can be clockwise or counterclockwise.
+
+            Because of the Y-flip we did in the projection matrix, the vertices are now being drawn in counter-clockwise order 
+            instead of clockwise order. This causes backface culling to kick in and prevents any geometry from being drawn, unless
+            we make the front face match this (VK_FRONT_FACE_COUNTER_CLOCKWISE).
         */
         rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
-        rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+        rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         /*
             The rasterizer can alter the depth values by adding a constant value or biasing them based on a fragment’s slope. 
             This is sometimes used for shadow mapping, but we won’t be using it.
@@ -2391,6 +2410,16 @@ private:
         // binds buffers to a command buffer for use in subsequent drawing commands
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
         vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT16); // we can only have a single index buffer
+
+        /*
+            Unlike vertex and index buffers, descriptor sets are not unique to graphics pipelines. Therefore, we need to specify if 
+            we want to bind descriptor sets to the graphics or compute pipeline. The next parameter is the layout that the descriptors 
+            are based on. The next three parameters specify the index of the first descriptor set, the number of sets to bind, and the 
+            array of sets to bind (there could be multiple descriptor sets per frame). The last two parameters specify an array of offsets 
+            that are used for dynamic descriptors.
+        */
+        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSets[currentFrame], 0, nullptr);
+
         /*
             The first two parameters specify the number of indices and the number of instances. We’re not using instancing, so just 
             specify 1 instance. The number of indices represents the number of vertices that will be passed to the vertex shader. 
@@ -2510,6 +2539,8 @@ private:
 
         // copy the data in the uniform buffer object to the current (mapped) uniform buffer
         memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
+
+        // ALWAYS REMEMBER TO RECOMPILE THE SHADERS IF THEY CHANGED!
     }
 
     void cleanupSwapChain()
@@ -2628,6 +2659,9 @@ private:
             throw std::runtime_error("Failed to acquire swap chain image.");
         }
 
+        // As long as we are done using the data (based on imageAvailableSemaphores[currentFrame]), we can overwrite it.
+        updateUniformBuffer(currentFrame); // per frame UBO changes every frame
+
         // Reset the fence to the unsignaled (blocked) state only if we are submitting work (avoids deadlock).
         vkResetFences(device, 1, &inFlightFences[currentFrame]);
 
@@ -2638,8 +2672,6 @@ private:
             Since we don’t want to do anything special, we leave it as 0.
         */
         vkResetCommandBuffer(commandBuffers[currentFrame], 0);
-
-        updateUniformBuffer(currentFrame); // per frame UBO changes every frame
 
         recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
