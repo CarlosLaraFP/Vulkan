@@ -11,4 +11,5 @@ with the front buffer (last displayed frame), resulting in the screen smoothly u
 * Allocate multiple buffers from a single memory allocation.
 * Store vertex and index buffer into a single VkBuffer and use offsets in (vkCmdBindVertexBuffers, etc).
 * Dedicated memory operations queue with command pool.
+* Implement push constants to replace UBO approach.
 * 

@@ -1,7 +1,15 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h> // GLFW will include its own definitions and automatically load <vulkan/vulkan.h>
 
+#define GLM_FORCE_RADIANS // necessary to make sure that functions like glm::rotate use radians as arguments
 #include <glm/glm.hpp> // linear algebra related types like vectors and matrices
+/*
+    Exposes functions that can be used to generate model transformations like glm::rotate, 
+    view transformations like glm::lookAt, and projection transformations like glm::perspective.
+*/
+#include <glm/gtc/matrix_transform.hpp>
+// Exposes functions to do precise timekeeping (i.e. make sure that the geometry rotates 90 degrees per second regardless of frame rate).
+#include <chrono>
 
 #include <iostream>
 #include <stdexcept>
@@ -1653,9 +1661,7 @@ private:
         }
     }
 
-    /*
-        We need to provide details about every descriptor binding used in the shaders for pipeline creation.
-    */
+    // We need to provide details about every descriptor binding used in the shaders for pipeline creation.
     void createDescriptorSetLayout()
     {
         VkDescriptorSetLayoutBinding uboLayoutBinding {};
@@ -2327,6 +2333,74 @@ private:
         }
     }
 
+    /*
+        Generates a new transformation every frame (i.e. to make the geometry spin).
+        Using a UBO this way is not the most efficient way to pass frequently changing values to the shader. 
+        A more efficient way to pass a small buffer of data to shaders are push constants.
+    */
+    void updateUniformBuffer(uint32_t currentImage)
+    {
+        /*
+            The static keyword is used to initialize the variable exactly once and maintain its value between function calls
+            The static keyword effectively turns startTime into a global variable in the scope of the updateUniformBuffer function. 
+            This technique is often used to track the state that persists across function calls 
+            without using global variables accessible outside the function scope.
+        */
+        static auto startTime = std::chrono::high_resolution_clock::now();
+
+        auto currentTime = std::chrono::high_resolution_clock::now();
+        // calculate the time in seconds since rendering has started with floating point accuracy
+        float deltaTime = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+
+        UniformBufferObject ubo {};
+        /*
+            Takes an existing transformation, rotation angle, and rotation axis as parameters. 
+            The glm::mat4(1.0f) constructor returns an identity matrix. Using a rotation angle of deltaTime * glm::radians(90.0f) 
+            accomplishes the purpose of rotation of 90 degrees per second, regardless of frame rate.
+            If deltaTime = 1 second, then 90 degrees rotation. If deltaTime = 0.5 second, then 45 degrees rotation, etc.
+        */
+        ubo.model = glm::rotate(glm::mat4(1.0f), deltaTime * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        // Looks at the geometry from above at a 45 degree angle. It takes the eye position, center position, and up axis as parameters.
+        ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        /*
+            Perspective projection with a 45 degree vertical field-of-view with the aspect ratio of the viewport.
+            The glm::perspective matrix defines how the scene is projected onto a 2D viewport from a specific viewing angle.
+            FOV influences how wide the scene appears and how pronounced is the perspective effect (objects appear smaller as they are further away).
+            The aspect ratio parameter ensures that the scene is correctly scaled horizontally and vertically, preventing distortion.
+            For example, a widescreen display would have a greater width than height, leading to a larger aspect ratio, ensuring that
+            objects in the scene have the correct proportions regardless of the screen size or shape.
+            The other parameters are the near and far view planes. These values define the depth range of the scene that will be rendered. 
+            Objects closer than the near plane or further than the far plane are clipped out and not displayed. It is important to use the 
+            current swap chain extent to calculate the aspect ratio to take into account the new width and height of the window after a resize.
+        */
+        ubo.projection = glm::perspective(glm::radians(45.0f), swapChainExtent.width / (float)swapChainExtent.height, 0.1f, 10.0f);
+        /*
+            GLM was originally designed for OpenGL, where the Y coordinate of the clip coordinates is inverted. 
+            The easiest way to compensate for that is to flip the sign on the scaling factor of the Y axis in the projection matrix. 
+            If we don’t do this, then the image will be rendered upside down.
+        */
+        ubo.projection[1][1] *= -1;
+        /*
+            Simplified form of a perspective projection matrix:
+
+            | a  0  0  0 |
+            | 0  b  0  0 |
+            | 0  0  c  d |
+            | 0  0 -1  0 |
+
+            a: This is typically found in the first row, first column (matrix[0][0]). It's related to the aspect ratio of the viewport and the field of view (FOV). It determines how much the scene is scaled horizontally. For a perspective projection, a is calculated as 1 / tan(FOVx / 2), where FOVx is the horizontal field of view. If the matrix is configured using the vertical FOV (which is common), a would also incorporate the aspect ratio of the viewport.
+
+            b: This entry (matrix[1][1]) is directly related to the vertical scaling of the scene and is determined by the vertical field of view (FOVy). It is calculated as 1 / tan(FOVy / 2). A larger FOVy results in a smaller value for b, causing less vertical scaling, and thus objects appear larger. It directly affects how "zoomed in" the scene appears vertically.
+
+            c and d: These are found in the third row and column (matrix[2][2]) and the third row, fourth column (matrix[2][3]), respectively. They are related to the near and far clipping planes (n and f). These values determine the mapping of depth to the normalized device coordinates and are crucial for depth buffering. They help ensure that only objects within a certain range of distances from the camera are rendered. The exact formulas for c and d depend on whether the depth range is 0 to 1 (Direct3D style) or -1 to 1 (traditional OpenGL style).
+
+            -1 in matrix[3][2]: This entry is part of what performs the "perspective divide" in the projection transformation. It's what creates the perspective effect, causing objects to appear smaller as they get farther from the camera.
+        */
+
+        // copy the data in the uniform buffer object to the current (mapped) uniform buffer
+        memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
+    }
+
     void cleanupSwapChain()
     {
         for (auto framebuffer : swapChainFramebuffers) 
@@ -2451,6 +2525,8 @@ private:
             Since we don’t want to do anything special, we leave it as 0.
         */
         vkResetCommandBuffer(commandBuffers[currentFrame], 0);
+
+        updateUniformBuffer(currentFrame);
 
         recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
