@@ -346,6 +346,8 @@ private:
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
     std::vector<void*> uniformBuffersMapped;
+    VkDescriptorPool descriptorPool;
+    std::vector<VkDescriptorSet> descriptorSets;
     VkDescriptorSetLayout descriptorSetLayout;
     VkPipelineLayout pipelineLayout;
     VkPipeline graphicsPipeline;
@@ -1661,6 +1663,115 @@ private:
         }
     }
 
+    /*
+        Descriptor pools allow for the allocation of memory for a fixed number of descriptors and descriptor sets upfront. By specifying the
+        number and type of descriptors that can be allocated from a pool, Vulkan implementations can optimize memory usage and management. 
+        This approach minimizes the overhead associated with dynamic memory allocation and deallocation, which can be costly in terms of performance.
+        Since Vulkan gives developers close control over hardware resources, descriptor pools require you to explicitly define how many 
+        descriptors of each type will be needed. This explicit control helps avoid unnecessary memory usage and ensures that the GPU 
+        allocates resources efficiently. By allocating descriptors from pools, Vulkan can batch resource management operations, which can 
+        significantly improve performance. Instead of handling descriptors individually, Vulkan deals with them in batches, reducing the 
+        overhead of resource allocation and freeing. Descriptor pools help reduce driver overhead by limiting the need for the driver to 
+        constantly manage resource allocations and deallocations. With a predefined pool, the driver has a clear understanding of the 
+        resources required, allowing for optimized handling of those resources.
+    */
+    void createDescriptorPool()
+    {
+        VkDescriptorPoolSize poolSize {};
+
+        poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSize.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT); // distinct UBO per frame
+
+        VkDescriptorPoolCreateInfo poolInfo {};
+        /*
+            The structure has an optional flag similar to command pools that determines if individual descriptor sets can be freed or not: 
+            VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT. We are not going to touch the descriptor set after creating it, 
+            so we don’t need this flag. You can leave flags to its default value of 0.
+        */
+        poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        poolInfo.poolSizeCount = 1; // 1 size only
+        poolInfo.pPoolSizes = &poolSize; // could be multiple sizes
+        poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT); // 1 descriptor set per frame
+
+        if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create descriptor pool.");
+        }
+    }
+
+    /*
+        Descriptor sets are used to provide shaders with access to resources like buffers and images.
+        Vulkan requires explicit management of these GPU resources via descriptor pools.
+    */
+    void createDescriptorSets()
+    {
+        /*
+            We create one descriptor set for each frame in flight, all with the same layout. 
+            We need all the copies of the layout because the next function expects an array matching the number of sets.
+        */
+        std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
+
+        VkDescriptorSetAllocateInfo allocInfo {};
+
+        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        allocInfo.descriptorPool = descriptorPool;
+        allocInfo.pSetLayouts = layouts.data();
+
+        descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+
+        // The call to vkAllocateDescriptorSets will allocate descriptor sets, each with one uniform buffer descriptor.
+        if (vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data()) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to allocate descriptor sets.");
+        }
+
+        // The descriptor sets have been allocated, and now the descriptors within need to be configured:
+        for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        {
+            // specifies the buffer and the region within it that contains the data for the descriptor
+            VkDescriptorBufferInfo bufferInfo {};
+            // If we are overwriting the whole buffer (which we are), then it is also possible to use the VK_WHOLE_SIZE value for the range.
+            bufferInfo.buffer = uniformBuffers[i];
+            bufferInfo.offset = 0;
+            bufferInfo.range = sizeof(UniformBufferObject);
+
+            // Describes how the descriptor(s) will be updated / written to.
+            VkWriteDescriptorSet descriptorWrite {};
+            /*
+                The first two fields specify the descriptor set to update and the binding. We gave our uniform buffer binding index 0. 
+                Descriptors can be arrays, so we also need to specify the first index in the array that we want to update. 
+                We are not using an array, so the index is simply 0.
+            */
+            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrite.dstSet = descriptorSets[i];
+            descriptorWrite.dstBinding = 0;
+            descriptorWrite.dstArrayElement = 0;
+            /*
+                We need to specify the type of descriptor again. It’s possible to update multiple descriptors at once in an array, 
+                starting at index dstArrayElement. The descriptorCount field specifies how many array elements we want to update.
+            */
+            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptorWrite.descriptorCount = 1;
+            /*
+                The last field (1/3) references an array with descriptorCount structs that actually configure the descriptors. It depends 
+                on the type of descriptor which one of the three you actually need to use. The pBufferInfo field is used for descriptors 
+                that refer to buffer data, pImageInfo is used for descriptors that refer to image data, and pTexelBufferView is used for 
+                descriptors that refer to buffer views. Our descriptor is based on buffers, so we are using pBufferInfo.
+            */
+            descriptorWrite.pBufferInfo = &bufferInfo;
+            descriptorWrite.pImageInfo = nullptr; // Optional
+            descriptorWrite.pTexelBufferView = nullptr; // Optional
+
+            /*
+                The updates are applied using vkUpdateDescriptorSets. It accepts two kinds of arrays as parameters: 
+                an array of VkWriteDescriptorSet and an array of VkCopyDescriptorSet. 
+                The latter can be used to copy descriptors to each other, as its name implies.
+            */
+            vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
+        }
+    }
+
     // We need to provide details about every descriptor binding used in the shaders for pipeline creation.
     void createDescriptorSetLayout()
     {
@@ -2462,6 +2573,8 @@ private:
         createVertexBuffer(); // requires the command pool due to the memory transfer command
         createIndexBuffer();
         createUniformBuffers();
+        createDescriptorPool();
+        createDescriptorSets(); // requires descriptor set layout(s)
         createCommandBuffers();
         createSyncObjects();
     }
@@ -2526,7 +2639,7 @@ private:
         */
         vkResetCommandBuffer(commandBuffers[currentFrame], 0);
 
-        updateUniformBuffer(currentFrame);
+        updateUniformBuffer(currentFrame); // per frame UBO changes every frame
 
         recordCommandBuffer(commandBuffers[currentFrame], imageIndex);
 
@@ -2646,6 +2759,7 @@ private:
             vkFreeMemory(device, uniformBuffersMemory[i], nullptr);
         }
 
+        vkDestroyDescriptorPool(device, descriptorPool, nullptr); // automatically frees descriptor sets
         vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
         vkDestroyPipeline(device, graphicsPipeline, nullptr);
         vkDestroyPipelineLayout(device, pipelineLayout, nullptr);

@@ -12,4 +12,5 @@ with the front buffer (last displayed frame), resulting in the screen smoothly u
 * Store vertex and index buffer into a single VkBuffer and use offsets in (vkCmdBindVertexBuffers, etc).
 * Dedicated memory operations queue with command pool.
 * Implement push constants to replace UBO approach.
+* Real-time offline on-device inference with rendered images via compute shader (MNIST or a canonical computer vision model).
 * 
