@@ -8,9 +8,13 @@ These fragments/pixels are then stored in the framebuffer's image attachments.
 Once a frame is ready after all render passes, all the images that comprise the frame are swapped 
 with the front buffer (last displayed frame), resulting in the screen smoothly updating.
 
+TODO next:
+
 * Allocate multiple buffers from a single memory allocation.
 * Store vertex and index buffer into a single VkBuffer and use offsets in (vkCmdBindVertexBuffers, etc).
 * Dedicated memory operations queue with command pool.
 * Implement push constants to replace UBO approach.
 * Real-time offline on-device inference with rendered images via compute shader (MNIST or a canonical computer vision model).
+* Render animating 3D models/meshes.
+* Normals and local/global illumination with shadows.
 * 

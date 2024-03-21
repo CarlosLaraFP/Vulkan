@@ -1,6 +1,9 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h> // GLFW will include its own definitions and automatically load <vulkan/vulkan.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 #define GLM_FORCE_RADIANS // necessary to make sure that functions like glm::rotate use radians as arguments
 #include <glm/glm.hpp> // linear algebra related types like vectors and matrices
 /*
@@ -1354,6 +1357,50 @@ private:
     }
 
     /*
+        Loads an image and uploads it into a Vulkan image object.
+        The stbi_load function takes the file path and number of channels to load as arguments. The STBI_rgb_alpha value forces the image 
+        to be loaded with an alpha channel, even if it doesn’t have one, which is nice for consistency with other textures in the future. 
+        The middle three parameters are outputs for the width, height, and actual number of channels in the image. The pointer that is 
+        returned is the first element in an array of pixel values. The pixels are laid out row by row with 4 bytes per pixel in the 
+        case of STBI_rgb_alpha for a total of texWidth * texHeight * 4 values.
+    */
+    void createTextureImage()
+    {
+        int textureWidth, textureHeight, textureChannels;
+
+        stbi_uc* pixels = stbi_load("textures/statue.jpg", &textureWidth, &textureHeight, &textureChannels, STBI_rgb_alpha);
+
+        VkDeviceSize imageSize = static_cast<uint64_t>(textureWidth) * static_cast<uint64_t>(textureHeight) * 4; // 4 bytes per pixel
+
+        if (!pixels) 
+        {
+            throw std::runtime_error("Failed to load texture image.");
+        }
+
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingBufferMemory;
+
+        createBuffer(
+            imageSize,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            stagingBuffer,
+            stagingBufferMemory
+        );
+
+        void* data;
+
+        vkMapMemory(device, stagingBufferMemory, 0, imageSize, 0, &data);
+
+        memcpy(data, pixels, static_cast<size_t>(imageSize));
+
+        vkUnmapMemory(device, stagingBufferMemory); // 1 time memory transfer
+
+        // No longer needed in host RAM since it's now been copied into GPU memory.
+        stbi_image_free(pixels);
+    }
+
+    /*
         Graphics cards can offer different types of memory to allocate from. Each type of memory varies in 
         terms of allowed operations and performance characteristics. We need to combine the requirements 
         of the buffer and our own application requirements to find the right type of memory to use.
@@ -2620,6 +2667,7 @@ private:
         createGraphicsPipeline(); // requires descriptor set layout
         createFramebuffers();
         createCommandPool();
+        createTextureImage(); // requires command buffers
         createVertexBuffer(); // requires the command pool due to the memory transfer command
         createIndexBuffer();
         createUniformBuffers();
@@ -2643,7 +2691,7 @@ private:
     void drawFrame()
     {
         /*
-            takes an array of fences and waits on the host for either any or all of the fences to be signaled before returning. 
+            Takes an array of fences and waits on the host for either any or all of the fences to be signaled before returning. 
             The VK_TRUE indicates that we want to wait for all fences, but in the case of a single one it doesn’t matter. We set the 
             timeout parameter to the maximum value of a 64 bit unsigned integer, UINT64_MAX, which effectively disables the timeout.
         */
