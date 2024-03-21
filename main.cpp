@@ -367,6 +367,7 @@ private:
     VkDeviceMemory indexBufferMemory;
     VkImage textureImage;
     VkDeviceMemory textureImageMemory;
+    VkImageView textureImageView;
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
     std::vector<void*> uniformBuffersMapped;
@@ -1172,6 +1173,47 @@ private:
         swapChainExtent = extent;
     }
 
+    VkImageView createImageView(VkImage image, VkFormat format)
+    {
+        VkImageViewCreateInfo viewInfo {};
+
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = image;
+        // The viewType and format fields specify how the image data should be interpreted. 
+        // The viewType parameter allows you to treat images as 1D textures, 2D textures, 3D textures and cube maps.
+        viewInfo.format = format;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        /*
+            The subresourceRange field describes what is the purpose of the image and which part of the image should be accessed.
+            Our images will be used as color targets without any mipmapping levels or multiple layers.
+            If we were working on a stereographic 3D application, then we would create a swap chain with multiple layers. We could then
+            create multiple image views for each image representing the views for the left and right eyes by accessing different layers.
+        */
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+        /*
+            The components field allows US to swizzle the color channels around.
+            For example, you can map all of the channels to the red channel for a monochrome texture.
+            We can also map constant values of 0 and 1 to a channel. In our case we’ll stick to the default mapping.
+        */
+        viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+
+        VkImageView imageView;
+
+        if (vkCreateImageView(device, &viewInfo, nullptr, &imageView) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create image view.");
+        }
+
+        return imageView;
+    }
+
     // Creates a basic image view for every image in the swap chain so that we can use them as color targets.
     void createImageViews()
     {
@@ -1179,39 +1221,7 @@ private:
 
         for (size_t i = 0; i < swapChainImages.size(); i++)
         {
-            VkImageViewCreateInfo createInfo {};
-
-            createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-            createInfo.image = swapChainImages[i];
-            // The viewType and format fields specify how the image data should be interpreted. 
-            // The viewType parameter allows you to treat images as 1D textures, 2D textures, 3D textures and cube maps.
-            createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            createInfo.format = swapChainImageFormat;
-            /*
-                The components field allows US to swizzle the color channels around. 
-                For example, you can map all of the channels to the red channel for a monochrome texture. 
-                We can also map constant values of 0 and 1 to a channel. In our case we’ll stick to the default mapping.
-            */
-            createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-            createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-            createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-            createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-            /*
-                The subresourceRange field describes what is the purpose of the image and which part of the image should be accessed. 
-                Our images will be used as color targets without any mipmapping levels or multiple layers.
-                If we were working on a stereographic 3D application, then we would create a swap chain with multiple layers. We could then 
-                create multiple image views for each image representing the views for the left and right eyes by accessing different layers.
-            */
-            createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            createInfo.subresourceRange.baseMipLevel = 0;
-            createInfo.subresourceRange.levelCount = 1;
-            createInfo.subresourceRange.baseArrayLayer = 0;
-            createInfo.subresourceRange.layerCount = 1;
-
-            if (vkCreateImageView(device, &createInfo, nullptr, &swapChainImageViews[i]) != VK_SUCCESS)
-            {
-                throw std::runtime_error("Failed to create image view.");
-            }
+            swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat);
         }
     }
 
@@ -1415,8 +1425,13 @@ private:
         Instead, they define the structure, usage, and properties of the data storage, such as whether it will be used for
         vertex input, as a storage buffer, or for other purposes.
     */
-    void createBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags properties, VkBuffer& buffer, VkDeviceMemory& bufferMemory)
-    {
+    void createBuffer(
+        VkDeviceSize size, 
+        VkBufferUsageFlags usage, 
+        VkMemoryPropertyFlags properties, 
+        VkBuffer& buffer, 
+        VkDeviceMemory& bufferMemory
+    ) {
         VkBufferCreateInfo bufferInfo {};
         // queueFamilyIndexCount and pQueueFamilyIndices are ignored if sharingMode != VK_SHARING_MODE_CONCURRENT
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -1828,9 +1843,18 @@ private:
             Barriers are primarily used for synchronization purposes, so we must specify which types of operations that involve the resource
             must happen before the barrier, and which operations that involve the resource must wait on the barrier. We need to do that 
             despite already using vkQueueWaitIdle to manually synchronize. The right values depend on the old and new layout.
+            There is a special type of image layout that supports all operations, VK_IMAGE_LAYOUT_GENERAL. The problem with it is that it 
+            doesn’t necessarily offer the best performance for any operation. It is required for some special cases, like using an image 
+            as both input and output, or for reading an image after it has left the preinitialized layout.
         */
         VkPipelineStageFlags sourceStage;
         VkPipelineStageFlags destinationStage;
+        /*
+            Transfer writes must occur in the pipeline transfer stage. Since the writes don’t have to wait on anything, we may specify an 
+            empty access mask and the earliest possible pipeline stage VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT for the pre-barrier operations. 
+            It should be noted that VK_PIPELINE_STAGE_TRANSFER_BIT is not a real stage within the graphics and compute pipelines. It is 
+            more of a pseudo-stage where transfers happen. See the documentation for more information and other examples of pseudo-stages.
+        */
 
         // transfer writes that don’t need to wait on anything
         if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) 
@@ -1893,6 +1917,12 @@ private:
         The middle three parameters are outputs for the width, height, and actual number of channels in the image. The pointer that is
         returned is the first element in an array of pixel values. The pixels are laid out row by row with 4 bytes per pixel in the
         case of STBI_rgb_alpha for a total of texWidth * texHeight * 4 values.
+
+        All of the helper functions that submit commands have been set up to execute synchronously by waiting for the queue to become idle. 
+        For practical applications it is recommended to combine these operations in a single command buffer and execute them asynchronously 
+        for higher throughput, especially the transitions and copy in the createTextureImage function. Try to experiment with this by 
+        creating a setupCommandBuffer that the helper functions record commands into, and add a flushSetupCommands to execute the commands 
+        that have been recorded so far.
     */
     void createTextureImage()
     {
@@ -1972,6 +2002,11 @@ private:
 
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
+    }
+
+    void createTextureImageView()
+    {
+        textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB);
     }
 
     /*
@@ -2671,7 +2706,7 @@ private:
 
         vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
 
-        vkQueueWaitIdle(graphicsQueue);
+        vkQueueWaitIdle(graphicsQueue); // enforcing one-time commands start and finish sequentially
 
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
     }
@@ -2979,6 +3014,7 @@ private:
         createFramebuffers();
         createCommandPool();
         createTextureImage(); // requires command buffers
+        createTextureImageView();
         createVertexBuffer(); // requires the command pool due to the memory transfer command
         createIndexBuffer();
         createUniformBuffers();
@@ -3157,9 +3193,10 @@ private:
     {
         cleanupSwapChain();
 
-        // Memory that is bound to a buffer object may be freed once the buffer is no longer used.
+        vkDestroyImageView(device, textureImageView, nullptr); // destroy before the image
         vkDestroyImage(device, textureImage, nullptr);
         vkFreeMemory(device, textureImageMemory, nullptr);
+        // Memory that is bound to a buffer object may be freed once the buffer is no longer used.
         vkDestroyBuffer(device, indexBuffer, nullptr);
         vkFreeMemory(device, indexBufferMemory, nullptr);
         vkDestroyBuffer(device, vertexBuffer, nullptr);

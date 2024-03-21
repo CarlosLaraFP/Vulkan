@@ -17,4 +17,5 @@ TODO next:
 * Real-time offline on-device inference with rendered images via compute shader (MNIST or a canonical computer vision model).
 * Render animating 3D models/meshes.
 * Normals and local/global illumination with shadows.
+* Execute commands in createTextureImage asynchronously.
 * 
