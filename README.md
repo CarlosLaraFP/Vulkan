@@ -10,6 +10,7 @@ with the front buffer (last displayed frame), resulting in the screen smoothly u
 
 TODO next:
 
+* Modularize main.cpp into classes
 * Allocate multiple buffers from a single memory allocation.
 * Store vertex and index buffer into a single VkBuffer and use offsets in (vkCmdBindVertexBuffers, etc).
 * Dedicated memory operations queue with command pool.

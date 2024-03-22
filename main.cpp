@@ -368,6 +368,7 @@ private:
     VkImage textureImage;
     VkDeviceMemory textureImageMemory;
     VkImageView textureImageView;
+    VkSampler textureSampler; // texture filtering state
     std::vector<VkBuffer> uniformBuffers;
     std::vector<VkDeviceMemory> uniformBuffersMemory;
     std::vector<void*> uniformBuffersMapped;
@@ -823,7 +824,10 @@ private:
         }
         
         // Discrete GPUs have a significant performance advantage.
-        return indices.isComplete() && swapChainAdequate && deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+        return indices.isComplete() && 
+               swapChainAdequate && 
+               deviceProperties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU &&
+               deviceFeatures.samplerAnisotropy;
     }
 
     /*
@@ -892,7 +896,9 @@ private:
             queueCreateInfos.push_back(queueCreateInfo);
         }
 
-        VkPhysicalDeviceFeatures deviceFeatures {}; // nothing special for now
+        VkPhysicalDeviceFeatures deviceFeatures {};
+        // required for texture samplers
+        deviceFeatures.samplerAnisotropy = VK_TRUE;
 
         VkDeviceCreateInfo createInfo {};
 
@@ -2010,6 +2016,85 @@ private:
     }
 
     /*
+        Textures are accessed through samplers, which will apply filtering and transformations to compute the final color that is retrieved.
+        These filters are helpful to deal with problems like oversampling and undersampling. Aside from these filters, a sampler can also 
+        take care of transformations. It determines what happens when you try to read texels outside the image through its addressing mode.
+
+        Note the sampler does not reference a VkImage anywhere. The sampler is a distinct object that provides an interface 
+        to extract colors from a texture. It can be applied to any image you want, whether it is 1D, 2D or 3D.
+    */
+    void createTextureSampler()
+    {
+        VkSamplerCreateInfo samplerInfo {};
+
+        samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        /*
+            The magFilter and minFilter fields specify how to interpolate texels that are magnified or minified. 
+            Magnification concerns the oversampling problem describes above, and minification concerns undersampling. 
+            The choices are VK_FILTER_NEAREST and VK_FILTER_LINEAR.
+        */
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        /*
+            The addressing mode can be specified per axis using the addressMode fields. The available values are listed below. 
+            Most of these are demonstrated in the tutorial image under "Samplers". Note that the axes are called U, V and W 
+            instead of X, Y and Z. This is a convention for texture space coordinates.
+
+            VK_SAMPLER_ADDRESS_MODE_REPEAT: Repeat the texture when going beyond the image dimensions.
+            VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT: Like repeat, but inverts the coordinates to mirror the image when going beyond the dimensions.
+            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE: Take the color of the edge closest to the coordinate beyond the image dimensions.
+            VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE: Like clamp to edge, but instead uses the edge opposite to the closest edge.
+            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER: Return a solid color when sampling beyond the dimensions of the image.
+
+            It doesn’t matter which addressing mode we use here because we are not going to sample outside of the image in this tutorial. 
+            However, the repeat mode is probably the most common mode, because it can be used to tile textures like floors and walls.
+        */
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        /*
+            The next two fields specify if anisotropic filtering should be used. There is no reason not to use this unless performance 
+            is a concern. The maxAnisotropy field limits the amount of texel samples that can be used to calculate the final color. 
+            A lower value results in better performance, but lower quality results. To figure out which value we can use, we need 
+            to retrieve the properties of the physical device. Per the Vulkan documentation, VkPhysicalDeviceLimits has a member 
+            named 'limits'. This struct in turn has a member called maxSamplerAnisotropy and this is the maximum value we can 
+            specify for maxAnisotropy. If we want to go for maximum quality, we can simply use that value directly.
+        */
+        VkPhysicalDeviceProperties properties {};
+        vkGetPhysicalDeviceProperties(physicalDevice, &properties);
+        // Anisotropic filtering is an optional device feature. The createLogicalDevice function needs to request it first.
+        samplerInfo.anisotropyEnable = VK_TRUE;
+        samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy; // maximum texture quality
+        /*
+            The borderColor field specifies which color is returned when sampling beyond the image with clamp to border addressing mode. 
+            It is possible to return black, white or transparent in either float or int formats. You cannot specify an arbitrary color.
+        */
+        samplerInfo.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+        /*
+            The unnormalizedCoordinates field specifies which coordinate system we want to use to address texels in an image. 
+            If this field is VK_TRUE, then we can simply use coordinates within the [0, textureWidth) and [0, textureHeight) range. 
+            If it is VK_FALSE, then the texels are addressed using the [0, 1) range on all axes. Real-world applications almost always 
+            use normalized coordinates because then it’s possible to use textures of varying resolutions with the exact same coordinates.
+        */
+        samplerInfo.unnormalizedCoordinates = VK_FALSE;
+        /*
+            If a comparison function is enabled, then texels will first be compared to a value, and the result of that comparison is used in filtering operations. This is mainly used for percentage-closer filtering on shadow maps.
+        */
+        samplerInfo.compareEnable = VK_FALSE;
+        samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
+        // mipmapping filtering
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        samplerInfo.mipLodBias = 0.0f;
+        samplerInfo.minLod = 0.0f;
+        samplerInfo.maxLod = 0.0f;
+
+        if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create texture sampler.");
+        }
+    }
+
+    /*
         We are going to copy new data to the uniform buffer every frame, so it doesn’t really make any sense to have a staging buffer. 
         It would just add extra overhead in this case and likely degrade performance instead of improving it.
 
@@ -3015,6 +3100,7 @@ private:
         createCommandPool();
         createTextureImage(); // requires command buffers
         createTextureImageView();
+        createTextureSampler();
         createVertexBuffer(); // requires the command pool due to the memory transfer command
         createIndexBuffer();
         createUniformBuffers();
@@ -3193,6 +3279,7 @@ private:
     {
         cleanupSwapChain();
 
+        vkDestroySampler(device, textureSampler, nullptr);
         vkDestroyImageView(device, textureImageView, nullptr); // destroy before the image
         vkDestroyImage(device, textureImage, nullptr);
         vkFreeMemory(device, textureImageMemory, nullptr);
