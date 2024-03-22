@@ -233,7 +233,7 @@ struct SwapChainSupportDetails
 // Interleaving vertex attributes
 struct Vertex
 {
-    glm::vec2 position;
+    glm::vec3 position;
     glm::vec3 color;
     glm::vec2 texture;
 
@@ -280,7 +280,7 @@ struct Vertex
         // the binding number which this attribute takes its data from
         attributeDescriptions[0].binding = 0;
         // the size and type of the vertex attribute data
-        attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+        attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
         // byte offset of this attribute relative to the start of an element in the vertex input binding
         attributeDescriptions[0].offset = offsetof(Vertex, position);
 
@@ -395,13 +395,22 @@ private:
     // Position and color values are combined into one array of vertices. This is known as interleaving vertex attributes.
     const std::vector<Vertex> vertices =
     {
-        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-        {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-        {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-        {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
+        {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
+        {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
+        {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+        {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f}},
+
+        {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 1.0f}},
+        {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 1.0f}},
+        {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 0.0f}},
+        {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 0.0f}}
     };
-    // The top-left corner is red, top-right is green, bottom-right is blue and the bottom-left is white.
-    const std::vector<uint16_t> indices = { 0, 1, 2, 2, 3, 0 }; // uint16_t because we are using less than 65,535 unique vertices
+    // uint16_t because we are using less than 65,535 unique vertices
+    const std::vector<uint16_t> indices = 
+    { 
+        0, 1, 2, 2, 3, 0,
+        4, 5, 6, 6, 7, 4
+    };
 
     /*
         The reason that we’re creating a static function as a callback is because GLFW doesn't know how to 
@@ -2521,12 +2530,11 @@ private:
         rasterizer.lineWidth = 1.0f;
         /*
             The cullMode variable determines the type of face culling to use. You can disable culling, 
-            cull the front faces, cull the back faces or both. The frontFace variable specifies the 
+            cull the front faces, cull the back faces, or both. The frontFace variable specifies the 
             vertex order for faces to be considered front-facing and can be clockwise or counterclockwise.
-            Typical screen coordinates (top-left corner is (0,0), increasing rightward and downward) result in a clockwise ordering.
             Because of the Y-flip we did in the projection matrix, the vertices are now being drawn in counter-clockwise order 
-            instead of clockwise order. This causes backface culling to kick in and prevents any geometry from being drawn, unless
-            we make the front face match this (VK_FRONT_FACE_COUNTER_CLOCKWISE).
+            instead of clockwise order. This causes backface culling to kick in and prevents any geometry from being drawn, 
+            unless we make the front face match this (VK_FRONT_FACE_COUNTER_CLOCKWISE).
         */
         rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
         rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;

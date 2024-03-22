@@ -1,5 +1,7 @@
 #version 450
 
+// A combined image sampler descriptor is represented in GLSL by a sampler uniform.
+// The sampler automatically takes care of the filtering and transformations in the background. 
 layout(binding = 1) uniform sampler2D textureSampler;
 
 layout(location = 0) in vec3 fragmentColor;

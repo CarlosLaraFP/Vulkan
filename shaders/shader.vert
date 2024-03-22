@@ -24,7 +24,7 @@ layout(binding = 0) uniform UniformBufferObject
 	layout(location = 0) in dvec3 inPosition;
 	layout(location = 2) in vec3 inColor;
 */
-layout(location = 0) in vec2 inPosition;
+layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inColor;
 layout(location = 2) in vec2 inTexture;
 
@@ -38,7 +38,7 @@ void main() {
 		to the final normalized device coordinates on the screen. This is used in perspective projection as the 
 		perspective division and is essential for making closer objects look larger than objects that are further away.
 	*/
-	gl_Position = ubo.projection * ubo.view * ubo.model * vec4(inPosition, 0.0, 1.0);
+	gl_Position = ubo.projection * ubo.view * ubo.model * vec4(inPosition, 1.0);
 	
 	fragmentColor = inColor;
 	fragmentTexture = inTexture;
