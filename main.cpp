@@ -235,6 +235,7 @@ struct Vertex
 {
     glm::vec2 position;
     glm::vec3 color;
+    glm::vec2 texture;
 
     /*
         Tells Vulkan how to pass this data format to the vertex shader once it’s been uploaded into GPU memory.
@@ -269,10 +270,10 @@ struct Vertex
         The format parameter implicitly defines the byte size of attribute data and 
         the offset parameter specifies the number of bytes since the start of the per-vertex data to read from.
     */
-    static std::array<VkVertexInputAttributeDescription, 2> getAttributeDescriptions()
+    static std::array<VkVertexInputAttributeDescription, 3> getAttributeDescriptions()
     {
         // This array type is basically a vector with a known size at compile time.
-        std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions {};
+        std::array<VkVertexInputAttributeDescription, 3> attributeDescriptions {};
 
         // layout(location = 0) in vertex shader
         attributeDescriptions[0].location = 0;
@@ -288,6 +289,12 @@ struct Vertex
         attributeDescriptions[1].binding = 0;
         attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT; // only integers can be unsigned
         attributeDescriptions[1].offset = offsetof(Vertex, color);
+
+        // layout(location = 2) in vertex shader
+        attributeDescriptions[2].location = 2;
+        attributeDescriptions[2].binding = 0;
+        attributeDescriptions[2].format = VK_FORMAT_R32G32_SFLOAT;
+        attributeDescriptions[2].offset = offsetof(Vertex, texture);
 
         return attributeDescriptions;
     }
@@ -388,10 +395,10 @@ private:
     // Position and color values are combined into one array of vertices. This is known as interleaving vertex attributes.
     const std::vector<Vertex> vertices =
     {
-        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-        {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
-        {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},
-        {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}
+        {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+        {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+        {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+        {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}
     };
     // The top-left corner is red, top-right is green, bottom-right is blue and the bottom-left is white.
     const std::vector<uint16_t> indices = { 0, 1, 2, 2, 3, 0 }; // uint16_t because we are using less than 65,535 unique vertices
@@ -2130,6 +2137,51 @@ private:
     }
 
     /*
+        We need to provide details about every descriptor binding used in the shaders for pipeline creation.
+        We have a descriptor for a uniform buffer (accessed by the vertex shader),
+        and a descriptor for a combined image sampler (accessed by the fragment shader).
+    */
+    void createDescriptorSetLayout()
+    {
+        VkDescriptorSetLayoutBinding uboLayoutBinding{};
+        /*
+            It is possible for the shader variable to represent an array of uniform buffer objects, and descriptorCount specifies the number
+            of values in the array (i.e. specify a transformation for each of the bones in a skeleton for skeletal animation, etc).
+        */
+        uboLayoutBinding.binding = 0;
+        uboLayoutBinding.descriptorCount = 1;
+        uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; // can be a combination of VkShaderStageFlagBits values
+        uboLayoutBinding.pImmutableSamplers = nullptr; // only relevant for image sampling related descriptors
+
+        VkDescriptorSetLayoutBinding samplerLayoutBinding{};
+        /*
+            We intend to use the combined image sampler descriptor in the fragment shader. That’s where the color of the
+            fragment is going to be determined. It is possible to use texture sampling in the vertex shader, for example
+            to dynamically deform a grid of vertices by a heightmap.
+        */
+        samplerLayoutBinding.binding = 1;
+        samplerLayoutBinding.descriptorCount = 1;
+        samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        samplerLayoutBinding.pImmutableSamplers = nullptr;
+
+        std::array<VkDescriptorSetLayoutBinding, 2> bindings = { uboLayoutBinding, samplerLayoutBinding };
+
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+        layoutInfo.pBindings = bindings.data();
+        // flags and pNext: not extending this structure
+
+        if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create descriptor set layout.");
+        }
+    }
+
+    /*
         Descriptor pools allow for the allocation of memory for a fixed number of descriptors and descriptor sets upfront. By specifying the
         number and type of descriptors that can be allocated from a pool, Vulkan implementations can optimize memory usage and management. 
         This approach minimizes the overhead associated with dynamic memory allocation and deallocation, which can be costly in terms of performance.
@@ -2143,10 +2195,13 @@ private:
     */
     void createDescriptorPool()
     {
-        VkDescriptorPoolSize poolSize {};
+        std::array<VkDescriptorPoolSize, 2> poolSizes {};
 
-        poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        poolSize.descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT); // distinct UBO per frame
+        poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        poolSizes[0].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT); // distinct UBO per frame
+        // creating a larger descriptor pool to make room for the allocation of the combined image sampler, one per frame
+        poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        poolSizes[1].descriptorCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
         VkDescriptorPoolCreateInfo poolInfo {};
         /*
@@ -2155,8 +2210,8 @@ private:
             so we don’t need this flag. You can leave flags to its default value of 0.
         */
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-        poolInfo.poolSizeCount = 1; // 1 size only
-        poolInfo.pPoolSizes = &poolSize; // could be multiple sizes
+        poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
+        poolInfo.pPoolSizes = poolSizes.data(); // could be multiple sizes
         poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT); // 1 descriptor set per frame
 
         if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS)
@@ -2202,66 +2257,57 @@ private:
             bufferInfo.offset = 0;
             bufferInfo.range = sizeof(UniformBufferObject);
 
-            // Describes how the descriptor(s) will be updated / written to.
-            VkWriteDescriptorSet descriptorWrite {};
+            // bind the actual image and sampler resources to the descriptors in the descriptor set
+            VkDescriptorImageInfo imageInfo {};
+
+            imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            imageInfo.imageView = textureImageView;
+            imageInfo.sampler = textureSampler;
+
+            // Describes how the descriptors will be updated / written to.
+            std::array<VkWriteDescriptorSet, 2> descriptorWrites {};
+
             /*
                 The first two fields specify the descriptor set to update and the binding. We gave our uniform buffer binding index 0. 
                 Descriptors can be arrays, so we also need to specify the first index in the array that we want to update. 
                 We are not using an array, so the index is simply 0.
             */
-            descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrite.dstSet = descriptorSets[i];
-            descriptorWrite.dstBinding = 0;
-            descriptorWrite.dstArrayElement = 0;
+            descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrites[0].dstSet = descriptorSets[i];
+            descriptorWrites[0].dstBinding = 0;
+            descriptorWrites[0].dstArrayElement = 0;
             /*
                 We need to specify the type of descriptor again. It’s possible to update multiple descriptors at once in an array, 
                 starting at index dstArrayElement. The descriptorCount field specifies how many array elements we want to update.
             */
-            descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            descriptorWrite.descriptorCount = 1;
+            descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            descriptorWrites[0].descriptorCount = 1;
             /*
                 The last field (1/3) references an array with descriptorCount structs that actually configure the descriptors. It depends 
                 on the type of descriptor which one of the three you actually need to use. The pBufferInfo field is used for descriptors 
                 that refer to buffer data, pImageInfo is used for descriptors that refer to image data, and pTexelBufferView is used for 
                 descriptors that refer to buffer views. Our descriptor is based on buffers, so we are using pBufferInfo.
             */
-            descriptorWrite.pBufferInfo = &bufferInfo;
-            descriptorWrite.pImageInfo = nullptr; // Optional
-            descriptorWrite.pTexelBufferView = nullptr; // Optional
+            descriptorWrites[0].pBufferInfo = &bufferInfo;
+            descriptorWrites[0].pImageInfo = nullptr; // Optional
+            descriptorWrites[0].pTexelBufferView = nullptr; // Optional
+
+            descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            descriptorWrites[1].dstSet = descriptorSets[i];
+            descriptorWrites[1].dstBinding = 1;
+            descriptorWrites[1].dstArrayElement = 0;
+            descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            descriptorWrites[1].descriptorCount = 1;
+            descriptorWrites[1].pImageInfo = &imageInfo;
+            descriptorWrites[1].pBufferInfo = nullptr; // Optional
+            descriptorWrites[1].pTexelBufferView = nullptr; // Optional
 
             /*
                 The updates are applied using vkUpdateDescriptorSets. It accepts two kinds of arrays as parameters: 
                 an array of VkWriteDescriptorSet and an array of VkCopyDescriptorSet. 
                 The latter can be used to copy descriptors to each other, as its name implies.
             */
-            vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
-        }
-    }
-
-    // We need to provide details about every descriptor binding used in the shaders for pipeline creation.
-    void createDescriptorSetLayout()
-    {
-        VkDescriptorSetLayoutBinding uboLayoutBinding {};
-        /*
-            It is possible for the shader variable to represent an array of uniform buffer objects, and descriptorCount specifies the number
-            of values in the array (i.e. specify a transformation for each of the bones in a skeleton for skeletal animation, etc).
-        */
-        uboLayoutBinding.binding = 0;
-        uboLayoutBinding.descriptorCount = 1;
-        uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; // can be a combination of VkShaderStageFlagBits values
-        uboLayoutBinding.pImmutableSamplers = nullptr; // only relevant for image sampling related descriptors
-
-        VkDescriptorSetLayoutCreateInfo layoutInfo {};
-
-        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount = 1;
-        layoutInfo.pBindings = &uboLayoutBinding; // could be multiple bindings if 2+ in [vertex] shader
-        // flags and pNext: not extending this structure
-
-        if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS)
-        {
-            throw std::runtime_error("Failed to create descriptor set layout.");
+            vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
         }
     }
 
@@ -2477,7 +2523,7 @@ private:
             The cullMode variable determines the type of face culling to use. You can disable culling, 
             cull the front faces, cull the back faces or both. The frontFace variable specifies the 
             vertex order for faces to be considered front-facing and can be clockwise or counterclockwise.
-
+            Typical screen coordinates (top-left corner is (0,0), increasing rightward and downward) result in a clockwise ordering.
             Because of the Y-flip we did in the projection matrix, the vertices are now being drawn in counter-clockwise order 
             instead of clockwise order. This causes backface culling to kick in and prevents any geometry from being drawn, unless
             we make the front face match this (VK_FRONT_FACE_COUNTER_CLOCKWISE).
@@ -2584,7 +2630,7 @@ private:
             all of the bindings, because of descriptor pools and descriptor sets.
         */
         VkPipelineLayoutCreateInfo pipelineLayoutInfo {};
-        // required even if the pipeline does not use any UBOs
+        // required even if the pipeline does not use any
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pipelineLayoutInfo.setLayoutCount = 1;
         pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
@@ -2997,6 +3043,7 @@ private:
             If deltaTime = 1 second, then 90 degrees rotation. If deltaTime = 0.5 second, then 45 degrees rotation, etc.
         */
         ubo.model = glm::rotate(glm::mat4(1.0f), deltaTime * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        //ubo.model = glm::mat4(1.0f);
         // Looks at the geometry from above at a 45 degree angle. It takes the eye position, center position, and up axis as parameters.
         ubo.view = glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
         /*
