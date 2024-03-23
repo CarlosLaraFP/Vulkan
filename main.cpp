@@ -1399,6 +1399,15 @@ private:
             These specify the operations to wait on and the stages in which these operations occur. We need to wait for the swap chain to 
             finish reading from the image before we can access it. This can be accomplished by waiting on the color attachment output stage.
             srcStageMask and dstStageMask: pipeline stage(s) where the dependency applies
+            
+            srcStageMask and dstStageMask specify the stages of the pipeline that must wait on this dependency and the stages that are 
+            allowed to begin once the dependency conditions are met, respectively. Here, the previous subpass must complete using the
+            color attachment and complete using the depth attachment before the current subpass can begin using the attachments.
+
+            srcAccessMask and dstAccessMask specify the types of operations that must be completed (by the source) before the subpass can 
+            begin and the types of operations that will be performed in the subpass (destination). Including depth-stencil writes in both 
+            source and destination access masks directly relates to the use of a shared depth buffer, ensuring that depth writes from one 
+            frame are completed before the next frame begins depth testing or writes.
         */
         dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
         // the dependency is waiting on this specific type of operation to complete
@@ -2846,9 +2855,14 @@ private:
 
         for (size_t i = 0; i < swapChainImageViews.size(); i++)
         {
-            VkImageView attachments[] =
+            /*
+                The color attachment differs for every swap chain image, but the same depth image can be used by all of them 
+                because only a single subpass is running at the same time due to our semaphores.
+            */
+            std::array<VkImageView, 2> attachments =
             {
-                swapChainImageViews[i]
+                swapChainImageViews[i],
+                depthImageView
             };
 
             VkFramebufferCreateInfo framebufferInfo {};
@@ -2857,8 +2871,8 @@ private:
             // You can only use a framebuffer with the render passes that it is compatible with, 
             // which roughly means that they use the same number and type of attachments.
             framebufferInfo.renderPass = renderPass;
-            framebufferInfo.attachmentCount = 1;
-            framebufferInfo.pAttachments = attachments;
+            framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+            framebufferInfo.pAttachments = attachments.data();
             framebufferInfo.width = swapChainExtent.width;
             framebufferInfo.height = swapChainExtent.height;
             framebufferInfo.layers = 1; // our swap chain images are single images
@@ -3029,13 +3043,22 @@ private:
         renderPassInfo.renderArea.offset = { 0, 0 };
         renderPassInfo.renderArea.extent = swapChainExtent;
 
-        VkClearValue clearColor = { {{0.0f, 0.0f, 0.0f, 1.0f}} };
         /*
-            The last two parameters define the clear values to use for VK_ATTACHMENT_LOAD_OP_CLEAR, which we used as load 
+            Because we now have multiple attachments with VK_ATTACHMENT_LOAD_OP_CLEAR, we also need to specify multiple clear values.
+            The range of depths in the depth buffer is 0.0 to 1.0 in Vulkan, where 1.0 lies at the far view plane and 0.0 at the 
+            near view plane. The initial value at each point in the depth buffer should be the furthest possible depth, which is 1.0.
+            Note that the order of clearValues should be identical to the order of attachments.
+        */
+        std::array<VkClearValue, 2> clearValues {};
+        /*
+            The last two parameters define the clear values to use for VK_ATTACHMENT_LOAD_OP_CLEAR, which we used as load
             operation for the color attachment. We set the clear color to simply be black with 100% opacity.
         */
-        renderPassInfo.clearValueCount = 1;
-        renderPassInfo.pClearValues = &clearColor;
+        clearValues[0].color = {{ 0.0f, 0.0f, 0.0f, 1.0f }};
+        clearValues[1].depthStencil = { 1.0f, 0 };
+        
+        renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+        renderPassInfo.pClearValues = clearValues.data();
 
         /*
             All of the functions that record commands can be recognized by their vkCmd prefix. 
@@ -3283,9 +3306,9 @@ private:
         createRenderPass();
         createDescriptorSetLayout();
         createGraphicsPipeline(); // requires descriptor set layout
-        createFramebuffers();
         createCommandPool();
         createDepthResources();
+        createFramebuffers(); // depends on depth image and swap chain images
         createTextureImage(); // requires command buffers
         createTextureImageView();
         createTextureSampler();
