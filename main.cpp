@@ -2706,11 +2706,33 @@ private:
         multisampling.alphaToCoverageEnable = VK_FALSE; // Optional
         multisampling.alphaToOneEnable = VK_FALSE; // Optional
 
+        // A depth stencil state must always be specified if the render pass contains a depth stencil attachment.
+        VkPipelineDepthStencilStateCreateInfo depthStencil {};
         /*
-            If you are using a depth and/or stencil buffer, then you also need to configure the depth and stencil tests using 
-            VkPipelineDepthStencilStateCreateInfo. We don’t have one right now, so we can simply pass a nullptr instead of a 
-            pointer to such a struct. Depth and stencil testing will be revisited in depth buffering.
+            The depthTestEnable field specifies if the depth of new fragments should be compared to the depth buffer to see if they should
+            be discarded. The depthWriteEnable field specifies if the new depth of fragments that pass the depth test should actually be
+            written to the depth buffer.
         */
+        depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        depthStencil.depthTestEnable = VK_TRUE;
+        depthStencil.depthWriteEnable = VK_TRUE;
+        // Specifies the comparison that is performed to keep or discard fragments. 
+        // The convention is: lower depth = closer, so the depth of new fragments should be less.
+        depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+        /*
+            The depthBoundsTestEnable, minDepthBounds, and maxDepthBounds fields are used for the optional depth bound test. 
+            This allows us to only keep fragments that fall within the specified depth range. We won’t be using this functionality.
+        */
+        depthStencil.depthBoundsTestEnable = VK_FALSE;
+        depthStencil.minDepthBounds = 0.0f; // Optional
+        depthStencil.maxDepthBounds = 1.0f; // Optional
+        /*
+            The last three fields configure stencil buffer operations, which we also won’t be using in this tutorial. If you want to use 
+            these operations, then you will have to make sure that the format of the depth/stencil image contains a stencil component.
+        */
+        depthStencil.stencilTestEnable = VK_FALSE;
+        depthStencil.front = {}; // Optional
+        depthStencil.back = {}; // Optional
 
         /*
             After a fragment shader has returned a color, it needs to be combined with the color that is already in the framebuffer. 
@@ -2803,7 +2825,7 @@ private:
         pipelineInfo.pViewportState = &viewportState;
         pipelineInfo.pRasterizationState = &rasterizer;
         pipelineInfo.pMultisampleState = &multisampling;
-        pipelineInfo.pDepthStencilState = nullptr; // Optional
+        pipelineInfo.pDepthStencilState = &depthStencil;
         pipelineInfo.pColorBlendState = &colorBlending;
         pipelineInfo.pDynamicState = &dynamicState;
         // the pipeline layout is a Vulkan handle rather than a struct pointer
@@ -3262,6 +3284,10 @@ private:
             vkDestroyImageView(device, imageView, nullptr);
         }
 
+        vkDestroyImageView(device, depthImageView, nullptr);
+        vkDestroyImage(device, depthImage, nullptr);
+        vkFreeMemory(device, depthImageMemory, nullptr);
+
         vkDestroySwapchainKHR(device, swapChain, nullptr);
     }
 
@@ -3286,12 +3312,13 @@ private:
 
         createSwapChain();
         createImageViews(); // need to be recreated because they are based directly on the swap chain images
+        createDepthResources(); // needs to be recreated due to specific swap chain extent requirements
         /*
             Note that we don’t recreate the render pass here for simplicity. In theory it can be possible for the swap chain image format 
             to change during an applications' lifetime, e.g. when moving a window from an standard range to an high dynamic range monitor. 
             This may require the application to recreate the renderpass to make sure the change between dynamic ranges is properly reflected.
         */
-        createFramebuffers(); // need to be recreated because they directly depend on the swap chain images
+        createFramebuffers(); // need to be recreated because they directly depend on the swap chain images (and depth image)
     }
 
     void initVulkan() 
