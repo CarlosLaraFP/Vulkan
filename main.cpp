@@ -412,6 +412,7 @@ private:
     std::vector<uint32_t> indices; // we will use more than 65,535 unique vertices
     VkBuffer indexBuffer;
     VkDeviceMemory indexBufferMemory;
+    uint32_t mipLevels;
     VkImage textureImage;
     VkDeviceMemory textureImageMemory;
     VkImageView textureImageView;
@@ -1240,7 +1241,7 @@ private:
         swapChainExtent = extent;
     }
 
-    VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags)
+    VkImageView createImageView(VkImage image, VkFormat format, VkImageAspectFlags aspectFlags, uint32_t mipLevels)
     {
         VkImageViewCreateInfo viewInfo {};
 
@@ -1252,13 +1253,19 @@ private:
         viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
         /*
             The subresourceRange field describes what is the purpose of the image and which part of the image should be accessed.
-            Our images will be used as color targets without any mipmapping levels or multiple layers.
+            Our images will be used as color targets without multiple layers.
             If we were working on a stereographic 3D application, then we would create a swap chain with multiple layers. We could then
             create multiple image views for each image representing the views for the left and right eyes by accessing different layers.
+
+            Mipmaps are precalculated, downscaled versions of an image. Each new image is half the width and height of the previous one. 
+            Mipmaps are used as a form of Level of Detail or LOD. Objects that are far away from the camera will sample their textures from 
+            the smaller mip images. Using smaller images increases the rendering speed and avoids artifacts such as Moiré patterns.
+            In Vulkan, each of the mip images is stored in different mip levels of a VkImage. Mip level 0 is the original image, 
+            and the mip levels after level 0 are commonly referred to as the mip chain.
         */
         viewInfo.subresourceRange.aspectMask = aspectFlags;
         viewInfo.subresourceRange.baseMipLevel = 0;
-        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.levelCount = mipLevels;
         viewInfo.subresourceRange.baseArrayLayer = 0;
         viewInfo.subresourceRange.layerCount = 1;
         /*
@@ -1288,7 +1295,7 @@ private:
 
         for (size_t i = 0; i < swapChainImages.size(); i++)
         {
-            swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
+            swapChainImageViews[i] = createImageView(swapChainImages[i], swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
         }
     }
 
@@ -1537,7 +1544,7 @@ private:
                 /*
                     The OBJ format assumes a coordinate system where a vertical coordinate of 0 means the bottom of the image, 
                     however we’ve uploaded our image into Vulkan in a top to bottom orientation where 0 means the top of the image. 
-                    Solve this by flipping the vertical component of the texture coordinates:
+                    Solving this by flipping the vertical component of the texture coordinates:
                 */
                 vertex.texture = 
                 {
@@ -1862,6 +1869,7 @@ private:
     void createImage(
         uint32_t width, 
         uint32_t height, 
+        uint32_t mipLevels,
         VkFormat format, 
         VkImageTiling tiling, 
         VkImageUsageFlags usage, 
@@ -1875,15 +1883,15 @@ private:
             It is possible to create 1D, 2D, and 3D images. One dimensional images can be used to store an array of data or gradient,
             two dimensional images are mainly used for textures, and three dimensional images can be used to store voxel volumes,
             for example. The extent field specifies the dimensions of the image, basically how many texels there are on each axis.
-            That’s why depth must be 1 instead of 0. Our texture will not be an array and we won’t be using mipmapping for now.
+            That’s why depth must be 1 instead of 0.
         */
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
         imageInfo.extent.width = width;
         imageInfo.extent.height = height;
         imageInfo.extent.depth = 1;
-        imageInfo.mipLevels = 1;
-        imageInfo.arrayLayers = 1;
+        imageInfo.mipLevels = mipLevels;
+        imageInfo.arrayLayers = 1; // our texture is not an array
         // Vulkan supports many possible image formats, but we should use the same format 
         // for the texels as the pixels in the buffer, otherwise the copy operation will fail.
         imageInfo.format = format;
@@ -2019,7 +2027,7 @@ private:
         Using an image memory barrier to perform a layout transition ensures that the transition occurs at a well-defined 
         point in the execution order, preventing subsequent operations from starting until the transition is complete.
     */
-    void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout) 
+    void transitionImageLayout(VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout, uint32_t mipLevels)
     {
         VkCommandBuffer commandBuffer = beginOneTimeCommands();
 
@@ -2034,16 +2042,13 @@ private:
         */
         barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        /*
-            The image and subresourceRange specify the image that is affected and the specific part of the image. 
-            Our image is not an array and does not have mipmapping levels, so only one level and layer are specified.
-        */
+        // The image and subresourceRange specify the image that is affected and the specific part of the image.
         barrier.image = image;
         barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         barrier.subresourceRange.baseMipLevel = 0;
-        barrier.subresourceRange.levelCount = 1;
+        barrier.subresourceRange.levelCount = mipLevels;
         barrier.subresourceRange.baseArrayLayer = 0;
-        barrier.subresourceRange.layerCount = 1;
+        barrier.subresourceRange.layerCount = 1; // Our image is not an array
         /*
             Barriers are primarily used for synchronization purposes, so we must specify which types of operations that involve the resource
             must happen before the barrier, and which operations that involve the resource must wait on the barrier. We need to do that 
@@ -2142,6 +2147,20 @@ private:
             throw std::runtime_error("Failed to load texture image.");
         }
 
+        /*
+            Calculates the number of levels in the mip chain. 
+            The max function selects the largest dimension. 
+            The log2 function calculates how many times that dimension can be divided by 2 (number of mip levels).
+            The floor function handles cases where the largest dimension is not a power of 2 (rounds down).
+        */
+        mipLevels = static_cast<uint32_t>(
+            std::floor(
+                std::log2(
+                    std::max(textureWidth, textureHeight)
+                )
+            )
+        ) + 1; // 1 is added so that the original image has a mip level
+
         VkBuffer stagingBuffer;
         VkDeviceMemory stagingBufferMemory;
 
@@ -2173,6 +2192,7 @@ private:
         createImage(
             static_cast<uint32_t>(textureWidth),
             static_cast<uint32_t>(textureHeight),
+            mipLevels,
             VK_FORMAT_R8G8B8A8_SRGB,
             VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -2186,7 +2206,8 @@ private:
             textureImage,
             VK_FORMAT_R8G8B8A8_SRGB,
             VK_IMAGE_LAYOUT_UNDEFINED,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            mipLevels
         );
 
         // Mapped staging buffer -> device local image
@@ -2202,7 +2223,8 @@ private:
             textureImage,
             VK_FORMAT_R8G8B8_SRGB, 
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            mipLevels
         );
 
         vkDestroyBuffer(device, stagingBuffer, nullptr);
@@ -2211,7 +2233,7 @@ private:
 
     void createTextureImageView()
     {
-        textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
+        textureImageView = createImageView(textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
     }
 
     /*
@@ -2369,6 +2391,7 @@ private:
         createImage(
             swapChainExtent.width,
             swapChainExtent.height,
+            mipLevels,
             depthFormat,
             VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -2377,7 +2400,7 @@ private:
             depthImageMemory
         );
 
-        depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+        depthImageView = createImageView(depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, mipLevels);
 
         // We don’t need to explicitly transition the layout of the image to a depth attachment because we take care of it in the renderpass.
         //transitionImageLayout(depthImage, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
