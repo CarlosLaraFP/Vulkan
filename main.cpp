@@ -1503,10 +1503,15 @@ private:
                     attribute.vertices[3 * index.vertex_index + 2]
                 };
 
+                /*
+                    The OBJ format assumes a coordinate system where a vertical coordinate of 0 means the bottom of the image, 
+                    however we’ve uploaded our image into Vulkan in a top to bottom orientation where 0 means the top of the image. 
+                    Solve this by flipping the vertical component of the texture coordinates:
+                */
                 vertex.texture = 
                 {
                     attribute.texcoords[2 * index.texcoord_index + 0],
-                    attribute.texcoords[2 * index.texcoord_index + 1]
+                    1.0f - attribute.texcoords[2 * index.texcoord_index + 1]
                 };
 
                 vertex.color = { 1.0f, 1.0f, 1.0f };
