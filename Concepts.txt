@@ -1,3 +1,5 @@
+~3,500 frames per second
+
 Image: In Vulkan, an image (represented by VkImage) is a more general concept that refers to a block of memory used to store multidimensional, layered data. This data could be anything from texture data you'd sample in a shader to color or depth data you'd render to as part of a rendering pass. Images can have various formats, dimensions, and usage flags that define how they can be used within the API.
 
 Framebuffer: A framebuffer in Vulkan (represented by VkFramebuffer) is more specific and represents a collection of images to be used as the target for rendering operations. A framebuffer references one or more image views (VkImageView), which define how the pipeline accesses the image data. These image views usually include a color attachment, and optionally depth/stencil attachments, among others. The framebuffer essentially defines the "output" of a rendering pass, specifying which images the rendering commands will write to.

@@ -34,6 +34,11 @@
 #include <limits> // std::numeric_limits
 #include <fstream>
 #include <array>
+#include <unordered_map>
+
+// hash functions for the GLM types need to be included
+#define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtx/hash.hpp>
 
 const uint32_t WIDTH = 800;
 const uint32_t HEIGHT = 600;
@@ -308,7 +313,30 @@ struct Vertex
 
         return attributeDescriptions;
     }
+
+    bool operator==(const Vertex& other) const 
+    {
+        return position == other.position && color == other.color && texture == other.texture;
+    }
 };
+
+/*
+    A hash function for Vertex is implemented by specifying a template specialization for std::hash<T>.
+    Hash functions are a complex topic, but cppreference.com recommends the following approach combining
+    the fields of a struct to create a decent quality hash function:
+*/
+namespace std
+{
+    template<> struct hash<Vertex>
+    {
+        size_t operator()(Vertex const& vertex) const
+        {
+            return ((hash<glm::vec3>()(vertex.position) ^
+                (hash<glm::vec3>()(vertex.color) << 1)) >> 1) ^
+                (hash<glm::vec2>()(vertex.texture) << 1);
+        }
+    };
+}
 
 /*
     A descriptor is a way for shaders to freely access resources like buffers and images.
@@ -1025,14 +1053,14 @@ private:
                 that are as up-to-date as possible right until the vertical blank. 
                 On mobile devices, where energy usage is more important, use VK_PRESENT_MODE_FIFO_KHR instead.
             */
-            if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR)
+            if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) // ~3,500 FPS per RenderDoc
             {
                 return availablePresentMode;
             }
         }
 
         // VK_PRESENT_MODE_FIFO_KHR (v-sync) mode is guaranteed to be available
-        return VK_PRESENT_MODE_FIFO_KHR;
+        return VK_PRESENT_MODE_FIFO_KHR; // 60 FPS per RenderDoc
     }
 
     /*
@@ -1478,6 +1506,9 @@ private:
             throw std::runtime_error(warning + error);
         }
 
+        // using a user-defined type (Vertex struct) as key in a hash table requires us to implement two functions: 
+        // equality test and hash calculation
+        std::unordered_map<Vertex, uint32_t> uniqueVertices {};
         /*
             Combine all of the faces in the file into a single model. The triangulation feature has already made sure that there are 
             three vertices per face, so we can now directly iterate over the vertices and dump them straight into our vertices vector:
@@ -1516,8 +1547,28 @@ private:
 
                 vertex.color = { 1.0f, 1.0f, 1.0f };
 
-                vertices.push_back(vertex);
-                indices.push_back(indices.size());
+                /*
+                    The vertices vector contained a lot of duplicated vertex data because many vertices are included in multiple triangles. 
+                    Let's keep only the unique vertices and use the index buffer to reuse them whenever they come up. A straightforward 
+                    way to implement this is to use an unordered_map to keep track of the unique vertices and respective indices.
+                    Every time we read a vertex from the OBJ file, we check if we’ve already seen a vertex with the exact same position and 
+                    texture coordinates before. If not, we add it to vertices and store its index in the uniqueVertices container. After 
+                    that we add the index of the new vertex to indices. If we’ve seen the exact same vertex before, then we look up its 
+                    index in uniqueVertices and store that index in indices.
+
+                    If we check the size of vertices, we see that it has shrunk down from 1,500,000 to 265,645. 
+                    That means that each vertex is reused in an average number of ~6 triangles. 
+                    This definitely saves us a lot of GPU memory.
+                */
+                if (uniqueVertices.count(vertex) == 0) 
+                {
+                    uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
+
+                    vertices.push_back(vertex);
+                }
+
+                // indices do repeat; that's the whole point of an index buffer
+                indices.push_back(uniqueVertices[vertex]);
             }
         }
     }
