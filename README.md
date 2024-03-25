@@ -11,14 +11,24 @@ with the front buffer (last displayed frame), resulting in the screen smoothly u
 TODO next:
 
 * Modularize main.cpp into classes
+* Normals and local/global illumination
+* Blinn-Phong lighting
+* Post-processing effects
+* Shadow mapping
 * Enable best practice validation [layer]
-* Allocate multiple buffers from a single memory allocation.
-* Store vertex and index buffer into a single VkBuffer and use offsets in (vkCmdBindVertexBuffers, etc).
-* Dedicated memory operations queue with command pool.
-* Implement push constants to replace UBO approach.
-* Real-time offline on-device inference with rendered images via compute shader (MNIST or a canonical computer vision model).
-* Render animating 3D models/meshes.
-* Normals and local/global illumination with shadows.
-* Execute commands in createTextureImage asynchronously.
-* Post-Processing Anti-Aliasing: Methods like FXAA (Fast Approximate Anti-Aliasing) and TAA (Temporal Anti-Aliasing) to apply filtering to the rendered image as a post-processing step to smooth out jagged edges and other aliasing artifacts.
+* Allocate multiple buffers from a single memory allocation
+* Store vertex and index buffer into a single VkBuffer and use offsets in (vkCmdBindVertexBuffers, etc.)
+* Dedicated memory operations queue with command pool
+* Implement push constants [to replace UBO approach]
+* Real-time offline on-device inference with rendered images via compute shader (MNIST or a canonical computer vision model)
+* Render animating 3D models/meshes
+* Execute commands in createTextureImage asynchronously
+* Post-Processing Anti-Aliasing: Methods like FXAA (Fast Approximate Anti-Aliasing) and TAA (Temporal Anti-Aliasing) to apply filtering to the rendered image as a post-processing step to smooth out jagged edges and other aliasing artifacts
+* Instance rendering
+* Dynamic uniforms
+* Separate images and sampler descriptors
+* Multi-threaded command buffer generation
+* Multiple subpasses
+* Pipeline cache
+* Physics calculations via compute shader on a dedicated compute queue (async compute)
 * 

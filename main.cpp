@@ -744,13 +744,12 @@ private:
         vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, nullptr);
 
         std::vector<VkQueueFamilyProperties> queueFamilies { queueFamilyCount };
-        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
-
         /*
-            The VkQueueFamilyProperties struct contains some details about the queue family, including 
-            the type of operations that are supported and the number of queues that can be created based 
+            The VkQueueFamilyProperties struct contains some details about the queue family, including
+            the type of operations that are supported and the number of queues that can be created based
             on that family. We need to find at least one queue family that supports VK_QUEUE_GRAPHICS_BIT.
         */
+        vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
 
         int i = 0;
 
@@ -758,7 +757,7 @@ private:
         {
             // bitwise AND operation between the queueFlags bitmask and the VK_QUEUE_GRAPHICS_BIT constant
             // We could prefer a physical device that supports drawing and presentation in the same queue for improved performance.
-            if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT && !indices.graphicsFamily.has_value())
+            if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT && (queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT) && !indices.graphicsFamily.has_value())
             {
                 indices.graphicsFamily = i;
             }
