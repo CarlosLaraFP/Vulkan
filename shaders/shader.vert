@@ -1,8 +1,8 @@
 #version 450
-//#extension GL_KHR_vulkan_glsl : enable
+#extension GL_KHR_vulkan_glsl : enable
 
 // the model, view, and projection matrices are updated every frame (reference this binding in the descriptor set layout)
-layout(binding = 0) uniform UniformBufferObject
+layout(set = 0, binding = 0) uniform UniformBufferObject
 {
 	mat4 model;
 	mat4 view;

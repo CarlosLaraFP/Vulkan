@@ -2241,7 +2241,7 @@ private:
             To be able to start sampling from the texture image in the shader, we need one last transition to prepare it for shader access.
             The transition now takes place while generating mipmaps, after the blit command reading from it is finished.
         */
-        generateMipmaps(textureImage, textureWidth, textureHeight, mipLevels);
+        generateMipmaps(textureImage, VK_FORMAT_R8G8B8A8_SRGB, textureWidth, textureHeight, mipLevels);
 
         vkDestroyBuffer(device, stagingBuffer, nullptr);
         vkFreeMemory(device, stagingBufferMemory, nullptr);
@@ -2256,8 +2256,35 @@ private:
         mip level of an image independently. Each blit will only deal with two mip levels at a time, so we can transition each level
         into the optimal layout between blits commands.
     */
-    void generateMipmaps(VkImage image, int32_t textureWidth, int32_t textureHeight, uint32_t mipLevels)
+    void generateMipmaps(VkImage image, VkFormat imageFormat, int32_t textureWidth, int32_t textureHeight, uint32_t mipLevels)
     {
+        /*
+            vkCmdBlitImage is not guaranteed to be supported on all platforms. 
+            It requires the texture image format we use to support linear filtering.
+            vkGetPhysicalDeviceFormatProperties checks if the image format supports linear blitting.
+        */
+        VkFormatProperties formatProperties;
+        /*
+            The VkFormatProperties struct has three fields named linearTilingFeatures, optimalTilingFeatures, and bufferFeatures 
+            that each describe how the format can be used depending on the way it is used. We create a texture image with the 
+            optimal tiling format, so we need to check optimalTilingFeatures. Support for the linear filtering feature can be 
+            checked with the VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT.
+        */
+        vkGetPhysicalDeviceFormatProperties(physicalDevice, imageFormat, &formatProperties);
+
+        if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
+        {
+            /*
+                There are two alternatives in this case. We could implement a function that searches common texture image formats for one 
+                that does support linear blitting, or we could implement the mipmap generation in C++ (CPU side) with a library like 
+                stb_image_resize. Each mip level can then be loaded into the image in the same way that we loaded the original image.
+
+                It is uncommon in practice to generate the mipmap levels at runtime anyway. 
+                Usually they are pre-generated and stored in the texture file alongside the base level to improve loading speed.
+            */
+            throw std::runtime_error("Texture image format does not support linear blitting.");
+        }
+
         VkCommandBuffer commandBuffer = beginOneTimeCommands();
 
         VkImageMemoryBarrier barrier {};
