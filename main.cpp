@@ -2453,13 +2453,15 @@ private:
     */
     void createTextureSampler()
     {
+        // While the VkImage holds the mipmap data, VkSampler controls how that data is read while rendering.
         VkSamplerCreateInfo samplerInfo {};
 
         samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         /*
             The magFilter and minFilter fields specify how to interpolate texels that are magnified or minified. 
-            Magnification concerns the oversampling problem describes above, and minification concerns undersampling. 
+            Magnification concerns the oversampling problem and minification concerns undersampling. 
             The choices are VK_FILTER_NEAREST and VK_FILTER_LINEAR.
+            If the object is close to the camera, magFilter is used as the filter. If the object is further from the camera, minFilter is used.
         */
         samplerInfo.magFilter = VK_FILTER_LINEAR;
         samplerInfo.minFilter = VK_FILTER_LINEAR;
@@ -2512,9 +2514,17 @@ private:
         samplerInfo.compareOp = VK_COMPARE_OP_ALWAYS;
         // mipmapping filtering
         samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        samplerInfo.mipLodBias = 0.0f;
-        samplerInfo.minLod = 0.0f;
-        samplerInfo.maxLod = 0.0f;
+        /*
+            If mipmapMode is VK_SAMPLER_MIPMAP_MODE_NEAREST, lod selects the mip level to sample from. 
+            If mipmapMode is VK_SAMPLER_MIPMAP_MODE_LINEAR, lod is used to select two mip levels to be sampled. 
+            Those levels are sampled and the results are linearly blended.
+            To allow the full range of mip levels to be used, we set minLod to 0.0f, and maxLod to VK_LOD_CLAMP_NONE. 
+            This constant is equal to 1000.0f, which means that all available mipmap levels in the texture will be sampled. 
+            We have no reason to change the lod value, so we set mipLodBias to 0.0f.
+        */
+        samplerInfo.minLod = 0.0f; // Minimum mip level to sample from
+        samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+        samplerInfo.mipLodBias = 0.0f; // Optional
 
         if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS)
         {
