@@ -1362,12 +1362,18 @@ private:
     */
     void createRenderPass()
     {
-        // Here we have just a single color buffer attachment represented by one of the images from the swap chain.
+        /*
+            Here we had just a single color buffer attachment represented by one of the images from the swap chain.
+            Due to MSAA, we changed the finalLayout from VK_IMAGE_LAYOUT_PRESENT_SRC_KHR to VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL. 
+            That’s because multisampled images cannot be presented directly. We first need to resolve them to a regular image. 
+            This requirement does not apply to the depth buffer, since it won’t be presented at any point. 
+            Therefore, below we add only one new attachment for color which is a so-called resolve attachment.
+        */
         VkAttachmentDescription colorAttachment {};
         // The format of the color attachment should match the format of the swap chain images.
         colorAttachment.format = swapChainImageFormat;
-        // We are not doing anything with multisampling yet.
-        colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        // maximum MSAA supported by GPU for both color and depth attachments
+        colorAttachment.samples = msaaSamples;
         /*
             The loadOp and storeOp determine what to do with the data in the attachment before rendering and after rendering. 
 
@@ -1412,7 +1418,8 @@ private:
             swap chain after rendering, which is why we use VK_IMAGE_LAYOUT_PRESENT_SRC_KHR as finalLayout.
         */
         colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; // which layout the image will have before the render pass begins
-        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // layout to automatically transition to when the render pass finishes
+        // layout to automatically transition to when the render pass finishes
+        colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
         // Each attachment needs a reference [id]
         VkAttachmentReference colorAttachmentRef {};
@@ -1429,7 +1436,7 @@ private:
         VkAttachmentDescription depthAttachment {};
 
         depthAttachment.format = findDepthFormat(); // format should be the same as the depth image
-        depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        depthAttachment.samples = msaaSamples; // maximum MSAA supported by GPU for both color and depth attachments
         depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
         depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE; // depth data will not be used after drawing has finished
         depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -1446,6 +1453,25 @@ private:
         */
         depthAttachmentRef.attachment = 1;
         depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+        VkAttachmentDescription colorAttachmentResolve {};
+
+        colorAttachmentResolve.format = swapChainImageFormat;
+        colorAttachmentResolve.samples = VK_SAMPLE_COUNT_1_BIT; // MSAA done at this point
+        colorAttachmentResolve.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachmentResolve.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttachmentResolve.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        colorAttachmentResolve.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        colorAttachmentResolve.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        colorAttachmentResolve.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR; // presenting now with MSAA
+
+        VkAttachmentReference colorAttachmentResolveRef {};
+        /*
+            The render pass now has to be instructed to resolve multisampled color image into regular attachment. 
+            We create a new attachment reference that will point to the color buffer which will serve as the resolve target.
+        */
+        colorAttachmentResolveRef.attachment = 2;
+        colorAttachmentResolveRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
         VkSubpassDescription subpass {};
         // Vulkan may also support compute subpasses in the future, so we have to be explicit about this being a graphics subpass.
@@ -1468,6 +1494,8 @@ private:
             The rasterizer produces fragments (potential pixels) for all color attachments, and then depth testing is performed for all at once.
         */
         subpass.pDepthStencilAttachment = &depthAttachmentRef; // a subpass can only use a single depth (+stencil) attachment
+        // This is enough to let the render pass define a multisample resolve operation which will let us render the image to screen.
+        subpass.pResolveAttachments = &colorAttachmentResolveRef;
 
         /*
             Subpasses in a render pass automatically take care of image layout transitions. These transitions are controlled by subpass 
@@ -1508,8 +1536,13 @@ private:
             frame are completed before the next frame begins depth testing or writes.
         */
         dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-        // the dependency is waiting on this specific type of operation to complete
-        dependency.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        // the dependency is waiting on these specific types of operations to complete
+        /*
+            Since we are also reusing the multisampled color image, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT ensures that any write operations 
+            to the color attachment are completed before subsequent ones begin, thus preventing write-after-write hazards that can lead to 
+            unstable rendering results.
+        */
+        dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
         /*
             The operations that should wait on this are in the color attachment stage and involve the writing of the color attachment. 
             These settings will prevent the transition from happening until it’s actually necessary (and allowed): 
@@ -1520,7 +1553,12 @@ private:
         // and these writes must wait for the dependency to be satisfied.
         dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-        std::array<VkAttachmentDescription, 2> attachments = { colorAttachment, depthAttachment };
+        std::array<VkAttachmentDescription, 3> attachments = 
+        { 
+            colorAttachment, 
+            depthAttachment, 
+            colorAttachmentResolve 
+        };
 
         // Fill in with an array of attachments and subpasses
         VkRenderPassCreateInfo renderPassInfo {};
@@ -3166,7 +3204,7 @@ private:
 
         multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
         multisampling.sampleShadingEnable = VK_FALSE;
-        multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        multisampling.rasterizationSamples = msaaSamples;
         multisampling.minSampleShading = 1.0f; // Optional
         multisampling.pSampleMask = nullptr; // Optional
         multisampling.alphaToCoverageEnable = VK_FALSE; // Optional
@@ -3347,10 +3385,11 @@ private:
                 The color attachment differs for every swap chain image, but the same depth image can be used by all of them 
                 because only a single subpass is running at the same time due to our semaphores.
             */
-            std::array<VkImageView, 2> attachments =
+            std::array<VkImageView, 3> attachments =
             {
-                swapChainImageViews[i],
-                depthImageView
+                colorImageView,
+                depthImageView,
+                swapChainImageViews[i]
             };
 
             VkFramebufferCreateInfo framebufferInfo {};
