@@ -412,6 +412,10 @@ private:
     std::vector<uint32_t> indices; // we will use more than 65,535 unique vertices
     VkBuffer indexBuffer;
     VkDeviceMemory indexBufferMemory;
+    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT; // multisample anti-aliasing to smooth out jagged edges
+    VkImage colorImage; // stores the desired number of samples per pixel (multisampled image)
+    VkDeviceMemory colorImageMemory;
+    VkImageView colorImageView;
     uint32_t mipLevels;
     VkImage textureImage;
     VkDeviceMemory textureImageMemory;
@@ -845,6 +849,54 @@ private:
     }
 
     /*
+        On close inspection, you will notice jagged saw-like patterns along the edges of drawn geometric shapes. This undesired effect is 
+        called "aliasing" and it’s a result of a limited numbers of pixels that are available for rendering. Since there are no displays 
+        out there with unlimited resolution, it will be always visible to some extent. In ordinary rendering, the pixel color is determined 
+        based on a single sample point which in most cases is the center of the target pixel on screen. If part of the drawn line passes 
+        through a certain pixel but doesn’t cover the sample point, that pixel will be left blank, leading to the jagged "staircase" effect.
+        MSAA uses multiple sample points per pixel to determine its final color. Most modern GPUs support at least 8 samples but this 
+        number is not guaranteed to be the same everywhere. MSAA works by taking multiple samples within each pixel to determine how much 
+        of the pixel is covered by the geometry and then blending colors based on this coverage.
+
+        By default we use only one sample per pixel which is equivalent to no multisampling, in which case the final image will remain 
+        unchanged. The exact maximum number of samples can be extracted from VkPhysicalDeviceProperties associated with our selected 
+        physical device. We’re using a depth buffer, so we have to take into account the sample count for both color and depth. 
+        The highest sample count that is supported by both (&) will be the maximum we can support.
+    */
+    VkSampleCountFlagBits getMaxUsableSampleCount() 
+    {
+        VkPhysicalDeviceProperties physicalDeviceProperties;
+        vkGetPhysicalDeviceProperties(physicalDevice, &physicalDeviceProperties);
+
+        /*
+            If only color buffers were multisampled, but depth testing were performed at a single-sample resolution, 
+            the depth test could incorrectly resolve which surfaces are in front, particularly at the edges where polygons 
+            partially cover pixels. This inconsistency can lead to visual artifacts where a polygon that should be in front is not 
+            rendered correctly over a background surface. Therefore, number of samples needs to match. Including the depth buffer in MSAA 
+            allows the depth test to be performed per-sample rather than per-pixel. This means that each sample within a pixel can have its 
+            own depth value, enabling accurate depth testing for geometry that partially covers pixels. This per-sample depth testing is 
+            crucial for correctly rendering the edges of objects, where different samples within the same pixel may belong to different 
+            surfaces at varying distances from the camera.
+
+            For scenes with transparent or semi-transparent objects, accurately resolving which objects are visible through transparency 
+            requires per-sample depth information. This ensures that transparency blending is correctly performed based on the depth of 
+            objects within each pixel, maintaining the visual integrity of transparent surfaces and their interactions with other geometry 
+            in the scene.
+        */
+        VkSampleCountFlags counts = physicalDeviceProperties.limits.framebufferColorSampleCounts & physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+        
+        // VK_SAMPLE_COUNT_X_BIT specifies an image with X samples per pixel
+        if (counts & VK_SAMPLE_COUNT_64_BIT) { return VK_SAMPLE_COUNT_64_BIT; }
+        if (counts & VK_SAMPLE_COUNT_32_BIT) { return VK_SAMPLE_COUNT_32_BIT; }
+        if (counts & VK_SAMPLE_COUNT_16_BIT) { return VK_SAMPLE_COUNT_16_BIT; }
+        if (counts & VK_SAMPLE_COUNT_8_BIT) { return VK_SAMPLE_COUNT_8_BIT; }
+        if (counts & VK_SAMPLE_COUNT_4_BIT) { return VK_SAMPLE_COUNT_4_BIT; }
+        if (counts & VK_SAMPLE_COUNT_2_BIT) { return VK_SAMPLE_COUNT_2_BIT; }
+
+        return VK_SAMPLE_COUNT_1_BIT;
+    }
+
+    /*
         We need to evaluate each GPU and check if they are suitable for the operations we want to perform, 
         because not all graphics cards are created equal.
     */
@@ -918,6 +970,7 @@ private:
             if (isDeviceSuitable(device))
             {
                 physicalDevice = device;
+                msaaSamples = getMaxUsableSampleCount();
                 break;
             }
         }
@@ -1870,6 +1923,7 @@ private:
         uint32_t width, 
         uint32_t height, 
         uint32_t mipLevels,
+        VkSampleCountFlagBits numSamples,
         VkFormat format, 
         VkImageTiling tiling, 
         VkImageUsageFlags usage, 
@@ -1953,7 +2007,7 @@ private:
             for example, then you could use this to avoid allocating memory to store large volumes of "air" values.
             We won’t be using it, so leave it to its default value of 0.
         */
-        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.samples = numSamples; // default = VK_SAMPLE_COUNT_1_BIT
         imageInfo.flags = 0; // Optional
 
         /*
@@ -2212,6 +2266,7 @@ private:
             static_cast<uint32_t>(textureWidth),
             static_cast<uint32_t>(textureHeight),
             mipLevels,
+            VK_SAMPLE_COUNT_1_BIT,
             VK_FORMAT_R8G8B8A8_SRGB,
             VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -2255,6 +2310,14 @@ private:
         that we intend to use the texture image as both the source and destination of a transfer. Vulkan allows us to transition each
         mip level of an image independently. Each blit will only deal with two mip levels at a time, so we can transition each level
         into the optimal layout between blits commands.
+
+        Undersampling: This occurs when a high-frequency texture is rendered at a distance where its fine details cannot be adequately 
+        represented by the available screen pixels, leading to Moiré patterns. Mipmaps mitigate this by providing lower-frequency 
+        (downscaled) versions of the texture that more closely match the screen resolution at that distance.
+        
+        Oversampling: While mipmaps are designed to address undersampling, oversampling—sampling at a higher rate than the screen 
+        resolution—generally doesn't produce Moiré patterns but can lead to unnecessary computational work. Mipmaps ensure that the 
+        texture detail is appropriate for the rendering distance, thus preventing the inefficiencies associated with oversampling.
     */
     void generateMipmaps(VkImage image, VkFormat imageFormat, int32_t textureWidth, int32_t textureHeight, uint32_t mipLevels)
     {
@@ -2492,7 +2555,12 @@ private:
         */
         VkPhysicalDeviceProperties properties {};
         vkGetPhysicalDeviceProperties(physicalDevice, &properties);
-        // Anisotropic filtering is an optional device feature. The createLogicalDevice function needs to request it first.
+        /*
+            Anisotropic Filtering improves the quality of textures viewed at oblique angles, reducing the appearance of aliasing (visual 
+            artifacts that occur when high-frequency details in a scene (or texture) cannot be accurately represented due to the discrete 
+            nature of screen pixels or the sampling rate being too low) in detailed textures by varying the sampling rate according to the 
+            texture's orientation relative to the viewer. Anisotropic filtering is an optional device feature that needs to be requested.
+        */
         samplerInfo.anisotropyEnable = VK_TRUE;
         samplerInfo.maxAnisotropy = properties.limits.maxSamplerAnisotropy; // maximum texture quality
         /*
@@ -2522,14 +2590,39 @@ private:
             This constant is equal to 1000.0f, which means that all available mipmap levels in the texture will be sampled. 
             We have no reason to change the lod value, so we set mipLodBias to 0.0f.
         */
-        samplerInfo.minLod = 0.0f; // Minimum mip level to sample from
-        samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+        samplerInfo.minLod = 0.0f; // Minimum mip level to sample from (closest = more pixels = more texels needed)
+        samplerInfo.maxLod = VK_LOD_CLAMP_NONE; // Farthest from the camera = less pixels = less texels needed
         samplerInfo.mipLodBias = 0.0f; // Optional
 
         if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS)
         {
             throw std::runtime_error("Failed to create texture sampler.");
         }
+    }
+
+    /*
+        Creates a multisampled color buffer. We are using msaaSamples here as a function parameter to createImage. 
+        We are also using only one mip level, since this is enforced by the Vulkan specification in case of images with more than one 
+        sample per pixel. Also, this color buffer doesn’t need mipmaps since it’s not going to be used as a texture.
+    */
+    void createColorResources()
+    {
+        VkFormat colorFormat = swapChainImageFormat;
+
+        createImage(
+            swapChainExtent.width, 
+            swapChainExtent.height, 
+            1,
+            msaaSamples,
+            colorFormat,
+            VK_IMAGE_TILING_OPTIMAL,
+            VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            colorImage,
+            colorImageMemory
+        );
+
+        colorImageView = createImageView(colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
     }
 
     /*
@@ -2609,6 +2702,7 @@ private:
             swapChainExtent.width,
             swapChainExtent.height,
             1,
+            msaaSamples, // matches multisampled color buffer
             depthFormat,
             VK_IMAGE_TILING_OPTIMAL,
             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -3644,6 +3738,7 @@ private:
         // ALWAYS REMEMBER TO RECOMPILE THE SHADERS IF THEY CHANGED!
     }
 
+    // Destroy swap chain dependent resources
     void cleanupSwapChain()
     {
         for (auto framebuffer : swapChainFramebuffers) 
@@ -3655,6 +3750,10 @@ private:
         {
             vkDestroyImageView(device, imageView, nullptr);
         }
+
+        vkDestroyImageView(device, colorImageView, nullptr);
+        vkDestroyImage(device, colorImage, nullptr);
+        vkFreeMemory(device, colorImageMemory, nullptr);
 
         vkDestroyImageView(device, depthImageView, nullptr);
         vkDestroyImage(device, depthImage, nullptr);
@@ -3684,6 +3783,7 @@ private:
 
         createSwapChain();
         createImageViews(); // need to be recreated because they are based directly on the swap chain images
+        createColorResources(); // swap chain dependent resources
         createDepthResources(); // needs to be recreated due to specific swap chain extent requirements
         /*
             Note that we don’t recreate the render pass here for simplicity. In theory it can be possible for the swap chain image format 
@@ -3706,6 +3806,7 @@ private:
         createDescriptorSetLayout();
         createGraphicsPipeline(); // requires descriptor set layout
         createCommandPool();
+        createColorResources(); // creates multisampled color buffer
         createDepthResources();
         createFramebuffers(); // depends on depth image and swap chain images
         createTextureImage(); // requires command buffers

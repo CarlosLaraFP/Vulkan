@@ -20,4 +20,5 @@ TODO next:
 * Render animating 3D models/meshes.
 * Normals and local/global illumination with shadows.
 * Execute commands in createTextureImage asynchronously.
+* Post-Processing Anti-Aliasing: Methods like FXAA (Fast Approximate Anti-Aliasing) and TAA (Temporal Anti-Aliasing) to apply filtering to the rendered image as a post-processing step to smooth out jagged edges and other aliasing artifacts.
 * 
