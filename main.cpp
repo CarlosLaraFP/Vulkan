@@ -980,7 +980,8 @@ private:
             throw std::runtime_error("Failed to find a suitable GPU.");
         }
     }
-
+    
+    // Select the subset of GPU features required for the application.
     void createLogicalDevice()
     {
         QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
@@ -1012,8 +1013,9 @@ private:
         }
 
         VkPhysicalDeviceFeatures deviceFeatures {};
-        // required for texture samplers
-        deviceFeatures.samplerAnisotropy = VK_TRUE;
+        
+        deviceFeatures.samplerAnisotropy = VK_TRUE; // required for texture samplers
+        deviceFeatures.sampleRateShading = VK_TRUE; // improvement in addition to MSAA
 
         VkDeviceCreateInfo createInfo {};
 
@@ -1553,11 +1555,12 @@ private:
         // and these writes must wait for the dependency to be satisfied.
         dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
+        // order must match in framebuffer
         std::array<VkAttachmentDescription, 3> attachments = 
         { 
             colorAttachment, 
             depthAttachment, 
-            colorAttachmentResolve 
+            colorAttachmentResolve // this corresponds to the swap chain image
         };
 
         // Fill in with an array of attachments and subpasses
@@ -3203,9 +3206,9 @@ private:
         VkPipelineMultisampleStateCreateInfo multisampling {}; // disabled for now
 
         multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-        multisampling.sampleShadingEnable = VK_FALSE;
-        multisampling.rasterizationSamples = msaaSamples;
-        multisampling.minSampleShading = 1.0f; // Optional
+        multisampling.rasterizationSamples = msaaSamples; // enable MSAA in the pipeline
+        multisampling.sampleShadingEnable = VK_TRUE; // enable sample shading in the pipeline
+        multisampling.minSampleShading = 0.2f; // min fraction for sample shading; closer to one is smoother
         multisampling.pSampleMask = nullptr; // Optional
         multisampling.alphaToCoverageEnable = VK_FALSE; // Optional
         multisampling.alphaToOneEnable = VK_FALSE; // Optional
@@ -3389,7 +3392,7 @@ private:
             {
                 colorImageView,
                 depthImageView,
-                swapChainImageViews[i]
+                swapChainImageViews[i] // this corresponds to the resolve attachment
             };
 
             VkFramebufferCreateInfo framebufferInfo {};
