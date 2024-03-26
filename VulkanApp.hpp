@@ -1363,17 +1363,13 @@ private:
             We have the following choices for loadOp:
 
             VK_ATTACHMENT_LOAD_OP_LOAD: Preserve the existing contents of the attachment
-
             VK_ATTACHMENT_LOAD_OP_CLEAR: Clear the values to a constant at the start
-
             VK_ATTACHMENT_LOAD_OP_DONT_CARE: Existing contents are undefined; we don’t care about them
 
             In our case we’re going to use the clear operation to clear the framebuffer to black before drawing a new frame.
-
             There are only two possibilities for the storeOp:
 
             VK_ATTACHMENT_STORE_OP_STORE: Rendered contents will be stored in memory and can be read later
-
             VK_ATTACHMENT_STORE_OP_DONT_CARE: Contents of the framebuffer will be undefined after the rendering operation
         */
         colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR; // clear the framebuffer to black before drawing a new frame
@@ -1388,9 +1384,7 @@ private:
             Some of the most common layouts are:
 
             VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: Images used as color attachment
-
             VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: Images to be presented in the swap chain
-
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: Images to be used as destination for a memory copy operation (neural rendering?)
 
             Images need to be transitioned to specific layouts that are suitable for the operation they’re going to be involved in next.
@@ -3446,7 +3440,6 @@ private:
             The level parameter specifies if the allocated command buffers are primary or secondary command buffers.
 
             VK_COMMAND_BUFFER_LEVEL_PRIMARY: Can be submitted to a queue for execution, but cannot be called from other command buffers.
-
             VK_COMMAND_BUFFER_LEVEL_SECONDARY: Cannot be submitted directly, but can be called from primary command buffers.
 
             We won’t make use of the secondary command buffer functionality here, but you can
@@ -3517,9 +3510,7 @@ private:
             The flags parameter specifies how we’re going to use the command buffer. The following values are available:
 
             VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT: The command buffer will be rerecorded right after executing it once.
-
             VK_COMMAND_BUFFER_USAGE_RENDER_PASS_CONTINUE_BIT: This is a secondary command buffer that will be entirely within a single render pass.
-
             VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT: The command buffer can be resubmitted while it is also already pending execution.
 
             None of these flags are applicable for us right now.
@@ -3579,7 +3570,6 @@ private:
             The final parameter controls how the drawing commands within the render pass will be provided. It can have one of two values:
 
             VK_SUBPASS_CONTENTS_INLINE: The render pass commands will be embedded in the primary command buffer itself and no secondary command buffers will be executed.
-
             VK_SUBPASS_CONTENTS_SECONDARY_COMMAND_BUFFERS: The render pass commands will be executed from secondary command buffers.
 
             We will not be using secondary command buffers, so we will go with the first option.
@@ -3874,7 +3864,7 @@ private:
             UINT64_MAX means the function will block indefinitely until an image becomes available.
         */
         VkResult result = vkAcquireNextImageKHR(device, swapChain, UINT64_MAX, imageAvailableSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex);
-
+        
         /*
             The vkAcquireNextImageKHR and vkQueuePresentKHR functions can return the following special values to indicate this.
 
