@@ -109,43 +109,60 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
 }
 
 /*
-    Extensions in Vulkan, such as VkDebugUtilsMessengerEXT, play a critical role in extending the core functionality of Vulkan. Vulkan is designed to be a lean and efficient graphics and compute API, offering minimal features in its core specification to cover a wide range of hardware. Extensions allow developers to access additional features and tools that are not part of the core specification, enabling them to use new hardware capabilities, debugging tools, and other functionalities that may be vendor-specific or not universally needed.
+    Extensions in Vulkan, such as VkDebugUtilsMessengerEXT, play a critical role in extending the core functionality of Vulkan. 
+    Vulkan is designed to be a lean and efficient graphics and compute API, offering minimal features in its core specification 
+    to cover a wide range of hardware. Extensions allow developers to access additional features and tools that are not part of 
+    the core specification, enabling them to use new hardware capabilities, debugging tools, and other functionalities that may 
+    be vendor-specific or not universally needed.
 
-    Understanding
-
-    The VkDebugUtilsMessengerEXT extension is a part of the Vulkan API that provides a way to receive callbacks from the Vulkan driver for various events, such as errors, warnings, and performance issues. It is extremely useful during development for debugging and validating applications' Vulkan usage.
+    The VkDebugUtilsMessengerEXT extension is a part of the Vulkan API that provides a way to receive callbacks from the Vulkan driver for 
+    various events, such as errors, warnings, and performance issues. It is extremely useful during development for debugging and validating
+    applications' Vulkan usage.
 
     Why Extensions Need to be Loaded Dynamically
 
     Extensions like VkDebugUtilsMessengerEXT need to be loaded dynamically for several reasons:
 
-    Version and Vendor Independence: Vulkan aims to be a cross-platform API, supporting a wide range of hardware and software environments. Extensions can be vendor-specific or only available in certain versions of a driver or operating system. Dynamically loading extensions allows applications to query and use these features only when they are available, making the application more portable and robust.
+    Version and Vendor Independence: Vulkan aims to be a cross-platform API, supporting a wide range of hardware and software environments. 
+    Extensions can be vendor-specific or only available in certain versions of a driver or operating system. Dynamically loading extensions 
+    allows applications to query and use these features only when they are available, making the application more portable and robust.
 
-    Avoiding Bloat: Including all possible extensions and their functionalities directly in the Vulkan library would significantly increase its size and complexity. By requiring explicit loading of extensions, Vulkan keeps the core library lean and efficient. Developers only use and load what is necessary for their application.
+    Avoiding Bloat: Including all possible extensions and their functionalities directly in the Vulkan library would significantly increase 
+    its size and complexity. By requiring explicit loading of extensions, Vulkan keeps the core library lean and efficient. Developers only
+    use and load what is necessary for their application.
 
-    Forward Compatibility: Dynamically loading extensions ensures that applications can run on a wide variety of hardware and software configurations, including future ones. An application can check for the presence of an extension and adapt its behavior accordingly, whether the extension is available or not.
-
-    How Extensions are Loaded
+    Forward Compatibility: Dynamically loading extensions ensures that applications can run on a wide variety of hardware and software 
+    configurations, including future ones. An application can check for the presence of an extension and adapt its behavior accordingly, 
+    whether the extension is available or not.
 
     The methods below for loading/destroying the VkDebugUtilsMessengerEXT extension is a common pattern for working with Vulkan extensions:
 
-    vkGetInstanceProcAddr: This function retrieves the address of the extension function from the Vulkan loader or driver. By passing the instance and the name of the function, it returns a function pointer (PFN_vkCreateDebugUtilsMessengerEXT in this case) that can be cast to the appropriate type.
+    vkGetInstanceProcAddr: This function retrieves the address of the extension function from the Vulkan loader or driver. 
+    By passing the instance and the name of the function, it returns a function pointer (PFN_vkCreateDebugUtilsMessengerEXT in this case) 
+    that can be cast to the appropriate type.
 
-    Function Pointer Call: If the function pointer is not nullptr, the extension is present, and the application can call the function to use the extension's features. Otherwise, it indicates that the extension is not available (VK_ERROR_EXTENSION_NOT_PRESENT), and the application can handle this situation, usually by disabling the functionality associated with the extension or falling back to a different implementation.
+    Function Pointer Call: If the function pointer is not nullptr, the extension is present, and the application can call the function to 
+    use the extension's features. Otherwise, it indicates that the extension is not available (VK_ERROR_EXTENSION_NOT_PRESENT), and the 
+    application can handle this situation, usually by disabling the functionality associated with the extension or falling back to a 
+    different implementation.
 
-    This dynamic loading mechanism allows Vulkan applications to be both forward-compatible and adaptable to the wide range of hardware and software environments where they might run.
+    This dynamic loading mechanism allows Vulkan applications to be both forward-compatible and adaptable to the wide range of hardware and 
+    software environments where they might run.
 
-    Vulkan extensions can be thought of as additional features or functionalities that are not part of the Vulkan core specification. They can be provided by various sources:
+    Vulkan extensions can be thought of as additional features or functionalities that are not part of the Vulkan core specification. 
+    They can be provided by various sources:
 
     GPU Vendors (Hardware): Many Vulkan extensions are specific to hardware from certain GPU vendors, such as NVIDIA, AMD, or Intel. These extensions allow developers to take advantage of unique features and capabilities of these vendors' GPUs. For example, an extension might expose a new rendering technique or optimization that is only possible on a particular vendor's hardware.
-
     Khronos Group (Vulkan's Governing Body): Some extensions are standardized by the Khronos Group, the consortium behind Vulkan. These extensions may add features that are useful across a wide range of hardware but were not included in the core Vulkan specification for various reasons, possibly including the need for further experimentation or because they were developed after the core specification was finalized.
-
     Platform-Specific: There are also extensions that are specific to certain operating systems or platforms. These extensions allow Vulkan applications to better integrate with the underlying system, offering functionalities like better window system integration or specific optimizations for a given platform.
 
-    When an extension is available on your machine, it means that the combination of your GPU hardware, its driver, and possibly the operating system supports this extension. The Vulkan driver for your GPU implements these extensions to expose additional features beyond what is available in the Vulkan core. This is why not all extensions are available on all devices; their availability can depend on the hardware capability of the GPU, the driver version installed, and sometimes the operating system version.
-
-    The process of dynamically querying and loading extensions, as described earlier, allows a Vulkan application to check at runtime which extensions are available on the user's machine and adapt its behavior accordingly. This ensures that the application can take advantage of these extended features when available, while still being able to run on systems where those features are not supported.
+    When an extension is available on your machine, it means that the combination of your GPU hardware, its driver, and possibly the 
+    operating system supports this extension. The Vulkan driver for your GPU implements these extensions to expose additional features 
+    beyond what is available in the Vulkan core. This is why not all extensions are available on all devices; their availability can depend 
+    on the hardware capability of the GPU, the driver version installed, and sometimes the operating system version. The process of 
+    dynamically querying and loading extensions, as described earlier, allows a Vulkan application to check at runtime which extensions are 
+    available on the user's machine and adapt its behavior accordingly. This ensures that the application can take advantage of these 
+    extended features when available, while still being able to run on systems where those features are not supported.
 */
 
 /*
@@ -569,6 +586,16 @@ private:
         return true;
     }
 
+    void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo)
+    {
+        createInfo = {};
+        createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        createInfo.pfnUserCallback = debugCallback; // pointer to the callback function
+        createInfo.pUserData = nullptr; // Optional, such as a pointer to the HelloTriangleApplication class
+    }
+
     /*
         The instance is the connection between your application and the Vulkan library and
         creating it involves specifying some details about your application to the driver.
@@ -618,7 +645,7 @@ private:
         createInfo.ppEnabledExtensionNames = extensions.data();
 
         /*
-            The last members determine the global validation layers to enable(for debug mode).
+            The last members determine the global validation layers to enable (for debug mode).
 
             The vkCreateDebugUtilsMessengerEXT call requires a valid VkInstance to have been created
             and vkDestroyDebugUtilsMessengerEXT must be called before the VkInstance is destroyed.
@@ -635,12 +662,11 @@ private:
 
         if (enableValidationLayers)
         {
-            createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
-            createInfo.ppEnabledLayerNames = validationLayers.data();
-
             populateDebugMessengerCreateInfo(debugCreateInfo);
 
-            createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*)&debugCreateInfo;
+            createInfo.enabledLayerCount = static_cast<uint32_t>(validationLayers.size());
+            createInfo.ppEnabledLayerNames = validationLayers.data();
+            createInfo.pNext = &debugCreateInfo;
         }
         else
         {
@@ -664,16 +690,6 @@ private:
         }
     }
 
-    void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo)
-    {
-        createInfo = {};
-        createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-        createInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-        createInfo.pfnUserCallback = debugCallback; // pointer to the callback function
-        createInfo.pUserData = nullptr; // Optional, such as a pointer to the HelloTriangleApplication class
-    }
-
     void setupDebugMessenger()
     {
         if (!enableValidationLayers) return;
@@ -684,8 +700,8 @@ private:
         populateDebugMessengerCreateInfo(createInfo);
 
         /*
-            Since the debug messenger is specific to our Vulkan instance and its layers, it needs to be explicitly specified as first argument.
-            You will also see this pattern with other child objects later on.
+            Since the debug messenger is specific to our Vulkan instance and its layers, 
+            it needs to be explicitly specified as first argument. We will also see this pattern with other child objects later on.
         */
         if (CreateDebugUtilsMessengerEXT(instance, &createInfo, nullptr, &debugMessenger) != VK_SUCCESS)
         {
@@ -723,7 +739,7 @@ private:
         {
             // bitwise AND operation between the queueFlags bitmask and the VK_QUEUE_GRAPHICS_BIT constant
             // We could prefer a physical device that supports drawing and presentation in the same queue for improved performance.
-            if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT && (queueFamily.queueFlags & VK_QUEUE_COMPUTE_BIT) && !indices.graphicsFamily.has_value())
+            if (queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT && !indices.graphicsFamily.has_value())
             {
                 indices.graphicsFamily = i;
             }

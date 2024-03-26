@@ -1,0 +1,94 @@
+<mxfile host="app.diagrams.net" modified="2024-03-26T16:50:58.825Z" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36" etag="RvzxIil8IaE58JxqF_bd" version="24.2.0" type="device">
+  <diagram name="Page-1" id="_fkxvZBQSQZJkFAyOJGf">
+    <mxGraphModel dx="1050" dy="1622" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-4" value="&lt;div&gt;&lt;span style=&quot;font-size: 14px;&quot;&gt;GLFW window and framebuffer resize callback&lt;/span&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-5" value="&lt;div&gt;&lt;span style=&quot;font-size: 14px;&quot;&gt;Create VkInstance&lt;/span&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="200" y="40" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-6" value="&lt;div&gt;&lt;span style=&quot;font-size: 14px;&quot;&gt;Set up app debug messenger by dynamically loading&amp;nbsp;&lt;/span&gt;&lt;span style=&quot;background-color: initial; font-size: 14px;&quot;&gt;vkCreateDebugUtilsMessengerEXT from the loader or driver&lt;/span&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="360" y="40" width="290" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-7" value="&lt;div&gt;&lt;span style=&quot;font-size: 14px;&quot;&gt;Create VkSurfaceKHR via glfwCreateWindowSurface&lt;/span&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="690" y="40" width="170" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-8" value="" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="I5Z_sufWO4S1ydB13wSw-4" target="I5Z_sufWO4S1ydB13wSw-5">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="200" y="170" as="sourcePoint" />
+            <mxPoint x="250" y="120" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-9" value="" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="I5Z_sufWO4S1ydB13wSw-5" target="I5Z_sufWO4S1ydB13wSw-6">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="340" y="160" as="sourcePoint" />
+            <mxPoint x="390" y="110" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-10" value="" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="I5Z_sufWO4S1ydB13wSw-6" target="I5Z_sufWO4S1ydB13wSw-7">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="510" y="140" as="sourcePoint" />
+            <mxPoint x="560" y="90" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-11" value="&lt;div&gt;&lt;span style=&quot;font-size: 14px;&quot;&gt;Select VkPhysicalDevice&amp;nbsp;&lt;/span&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="900" y="40" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-12" value="" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="I5Z_sufWO4S1ydB13wSw-7" target="I5Z_sufWO4S1ydB13wSw-11">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="680" y="190" as="sourcePoint" />
+            <mxPoint x="730" y="140" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-13" value="&lt;div&gt;&lt;span style=&quot;font-size: 14px;&quot;&gt;Create logical VkDevice&lt;/span&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="40" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-14" value="" style="endArrow=classic;html=1;rounded=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="I5Z_sufWO4S1ydB13wSw-11" target="I5Z_sufWO4S1ydB13wSw-13">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="800" y="140" as="sourcePoint" />
+            <mxPoint x="850" y="90" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-15" value="1. Check validation layer support&lt;div&gt;2. Set VkApplicationInfo&lt;/div&gt;&lt;div&gt;3. Check required Vulkan extensions (GLFW, etc.)&lt;/div&gt;&lt;div&gt;4. Set VkDebugUtilsMessengerCreateInfoEXT with debug callback (for instance creation/destruction)&lt;/div&gt;&lt;div&gt;5. Set VkInstanceCreateInfo with 2, 3, 4&lt;/div&gt;&lt;div&gt;6. vkCreateInstance&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="200" y="-90" width="275" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-17" value="1. vkEnumeratePhysicalDevices&lt;div&gt;2. Find a suitable GPU&lt;/div&gt;&lt;div&gt;a) vkGetPhysicalDeviceProperties &amp;amp; vkGetPhysicalDeviceFeatures&lt;/div&gt;&lt;div&gt;b) Find queue families&lt;/div&gt;&lt;div&gt;c) Check for&amp;nbsp;VK_KHR_SWAPCHAIN_EXTENSION_NAME support in GPU and check if swap chain is compatible with the surface&lt;/div&gt;&lt;div&gt;d) Ensure deviceFeatures.samplerAnisotropy&lt;/div&gt;&lt;div&gt;3. Get max MSAA sample count based on vkGetPhysicalDeviceProperties (framebuffer color &amp;amp; depth limits)&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="900" y="-110" width="360" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-18" value="vkGetPhysicalDeviceSurfaceCapabilitiesKHR&lt;div&gt;vkGetPhysicalDeviceSurfaceFormatsKHR&lt;/div&gt;&lt;div&gt;vkGetPhysicalDeviceSurfacePresentModesKHR&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;=&amp;gt; struct SwapChainSupportDetails {&lt;/div&gt;&lt;div&gt;&amp;nbsp; &amp;nbsp; VkSurfaceCapabilitiesKHR&lt;/div&gt;&lt;div&gt;&amp;nbsp; &amp;nbsp; std::vector&amp;lt;VkSurfaceFormatKHR&amp;gt;&lt;/div&gt;&lt;div&gt;&amp;nbsp; &amp;nbsp; std::vector&amp;lt;VkPresentModeKHR&amp;gt;&lt;/div&gt;&lt;div&gt;};&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="620" y="-110" width="260" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-20" value="" style="endArrow=none;dashed=1;html=1;rounded=0;" edge="1" parent="1">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="880" y="-27" as="sourcePoint" />
+            <mxPoint x="900" y="-30" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-21" value="vkGetPhysicalDeviceQueueFamilyProperties &lt;br&gt;=&amp;gt; std::vector&amp;lt;VkQueueFamilyProperties&amp;gt;&lt;div&gt;&lt;br&gt;&lt;div&gt;queueFamily.queueFlags &amp;amp; VK_QUEUE_GRAPHICS_BIT (and/or compute)&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;div&gt;vkGetPhysicalDeviceSurfaceSupportKHR&lt;/div&gt;&lt;/div&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;align=left;" vertex="1" parent="1">
+          <mxGeometry x="620" y="-230" width="260" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-22" value="" style="endArrow=none;dashed=1;html=1;rounded=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" target="I5Z_sufWO4S1ydB13wSw-21">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="900" y="-50" as="sourcePoint" />
+            <mxPoint x="950" y="-180" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-24" value="" style="endArrow=none;html=1;rounded=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.174;entryY=1.011;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="I5Z_sufWO4S1ydB13wSw-11" target="I5Z_sufWO4S1ydB13wSw-17">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="970" y="190" as="sourcePoint" />
+            <mxPoint x="1020" y="140" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="I5Z_sufWO4S1ydB13wSw-25" value="" style="endArrow=none;html=1;rounded=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.22;entryY=1.02;entryDx=0;entryDy=0;entryPerimeter=0;" edge="1" parent="1" source="I5Z_sufWO4S1ydB13wSw-5" target="I5Z_sufWO4S1ydB13wSw-15">
+          <mxGeometry width="50" height="50" relative="1" as="geometry">
+            <mxPoint x="140" y="40" as="sourcePoint" />
+            <mxPoint x="190" y="-10" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
