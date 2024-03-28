@@ -154,6 +154,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Context.cpp" />
+    <ClCompile Include="GraphicsPipeline.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -162,6 +163,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Context.hpp" />
+    <ClInclude Include="GraphicsPipeline.hpp" />
+    <ClInclude Include="Vertex.hpp" />
     <ClInclude Include="VulkanApp.hpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
