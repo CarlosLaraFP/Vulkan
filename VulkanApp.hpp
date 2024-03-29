@@ -308,12 +308,13 @@ private:
     VkFormat swapChainImageFormat; // required for VkImageViewCreateInfo and VkAttachmentDescription
     VkExtent2D swapChainExtent; // required for VkViewport in the graphics pipeline
     VkRenderPass renderPass;
+
     std::vector<Vertex> vertices;
-    VkBuffer vertexBuffer;
-    VkDeviceMemory vertexBufferMemory;
     std::vector<uint32_t> indices; // we will use more than 65,535 unique vertices
-    VkBuffer indexBuffer;
-    VkDeviceMemory indexBufferMemory;
+    VkBuffer vertexIndexBuffer;
+    VkDeviceMemory vertexIndexBufferMemory;
+    VkDeviceSize indexBufferOffset;
+
     VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT; // multisample anti-aliasing to smooth out jagged edges
     VkImage colorImage; // stores the desired number of samples per pixel (multisampled image)
     VkDeviceMemory colorImageMemory;
@@ -1448,7 +1449,7 @@ private:
         vertices, whereas our application can only render triangles. Luckily the LoadObj has an optional parameter to automatically
         triangulate such faces, which is enabled by default.
     */
-    void loadModel()
+    void loadModelCPU()
     {
         tinyobj::attrib_t attribute;
         std::vector<tinyobj::shape_t> shapes;
@@ -1525,6 +1526,134 @@ private:
                 indices.push_back(uniqueVertices[vertex]);
             }
         }
+
+        // vertices and indices are ready
+    }
+
+    /*
+        Buffers in Vulkan are regions of memory used for storing arbitrary data that can be read by the graphics card.
+        They can be used to store vertex data, but they can also be used for many other purposes.
+        Buffers do not automatically allocate memory for themselves, so we must take care of memory management.
+    */
+    void loadModelGPU()
+    {
+        // create staging vertex buffer
+
+        VkDeviceSize vertexBufferSize = sizeof(vertices[0]) * vertices.size();
+
+        VkBuffer vertexStagingBuffer;
+        VkDeviceMemory vertexStagingBufferMemory;
+
+        // VK_BUFFER_USAGE_TRANSFER_SRC_BIT: Buffer can be used as source in a memory transfer operation.
+        // VK_BUFFER_USAGE_TRANSFER_DST_BIT: Buffer can be used as destination in a memory transfer operation.
+        createBuffer(
+            vertexBufferSize,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            vertexStagingBuffer,
+            vertexStagingBufferMemory
+        );
+
+        void* vertexData;
+        /*
+            Memory objects created with vkAllocateMemory are not directly host (CPU) accessible.
+            Memory objects created with the memory property VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT are considered mappable.
+            Memory objects must be mappable in order to be successfully mapped on the host.
+
+            Map the buffer memory into CPU accessible memory.
+            This function allows us to access a region of the specified memory resource defined by an offset and size.
+            The offset and size here are 0 and bufferInfo.size, respectively. It is also possible to specify the special
+            value VK_WHOLE_SIZE to map all of the memory. The second to last parameter can be used to specify flags,
+            but there aren’t any available yet in the current API. It must be set to the value 0.
+            The last parameter is the host virtual address pointer to a region of a mappable memory object.
+        */
+        vkMapMemory(device, vertexStagingBufferMemory, 0, vertexBufferSize, 0, &vertexData);
+        // Copy the vertex data to the buffer
+        memcpy(vertexData, vertices.data(), static_cast<size_t>(vertexBufferSize));
+        /*
+            Caching: Modern CPUs use caches to improve access times to frequently used data. When you write data to a memory location that is mapped to device memory (like GPU memory), the data might first be written to a cache in the CPU. Depending on the cache write policy (write-back vs. write-through), the data might not be immediately written back to the actual device memory. This caching can lead to a situation where the data appears to be written from the perspective of the CPU, but has not yet been physically transferred to the device memory.
+
+            Memory Coherency: Memory coherency refers to the consistency of data stored in different caches or memory locations. In the context of CPU and GPU operations, it's important that both processors view consistent states of memory. However, without explicit synchronization, the CPU's view of the memory (after writing data) might differ from the GPU's view (which reads the data for rendering or computation).
+
+            Vulkan provides explicit control over memory operations, including synchronization. When you map device memory using vkMapMemory, Vulkan offers no guarantees about the visibility of writes to this memory across different caches and memory systems.
+
+            Delayed Copies: Because of caching mechanisms, the CPU's writes to the mapped memory might not be immediately reflected in the device memory. This delay can be due to the write-back caching policy, where writes are accumulated in the cache and flushed to the main memory at a later time.
+
+            Visibility of Writes: Even after the data is eventually written to the device memory, there's no guarantee that the GPU will see the updated data immediately. This lack of visibility is due to the absence of memory barriers or explicit cache flushes/invalidation commands that ensure memory coherency between CPU and GPU operations.
+
+            To address these issues, Vulkan provides mechanisms to ensure data coherency:
+
+            Memory Barriers: Vulkan allows you to use memory barriers to synchronize access to resources and ensure that memory writes are visible across different stages of the pipeline. A memory barrier can be used after copying data to ensure that subsequent operations (like shader reads) see the updated data.
+
+            Flushes and Invalidations: For host-visible memory types that do not guarantee coherency (VK_MEMORY_PROPERTY_HOST_COHERENT_BIT not set), applications need to explicitly flush writes to or invalidate reads from the mapped memory regions using vkFlushMappedMemoryRanges and vkInvalidateMappedMemoryRanges, respectively.
+        */
+        vkUnmapMemory(device, vertexStagingBufferMemory);
+        /*
+            Flushing memory ranges or using a coherent memory heap means that the driver will be aware of our writes to the buffer, but it
+            doesn’t mean that they are actually visible on the GPU yet. The transfer of data to the GPU is an operation that happens in the
+            background and the specification simply tells us that it is guaranteed to be complete as of the next call to vkQueueSubmit.
+        */
+
+        // create staging index buffer
+
+        VkDeviceSize indexBufferSize = sizeof(indices[0]) * indices.size();
+
+        VkBuffer indexStagingBuffer;
+        VkDeviceMemory indexStagingBufferMemory;
+
+        createBuffer(
+            indexBufferSize,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            indexStagingBuffer,
+            indexStagingBufferMemory
+        );
+
+        void* indexData;
+
+        vkMapMemory(device, indexStagingBufferMemory, 0, indexBufferSize, 0, &indexData);
+
+        memcpy(indexData, indices.data(), static_cast<size_t>(indexBufferSize));
+
+        vkUnmapMemory(device, indexStagingBufferMemory);
+
+        // two distinct staging buffers are ready for transfer [cmd] to a single device local memory
+
+        VkDeviceSize totalBufferSize = vertexBufferSize + indexBufferSize;
+
+        /*
+            The memory type that allows us to access the vertex buffer from the CPU may not be the most optimal memory type for the GPU
+            itself to read from. The most optimal memory has the VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT flag and is usually not accessible
+            by the CPU on dedicated graphics cards. We need to create two vertex buffers: One staging buffer in CPU accessible memory to
+            upload the data from the vertex array, and the final vertex buffer in GPU local memory. We then use a buffer copy command to
+            move the data from the staging buffer to the actual vertex buffer. The buffer copy command requires a queue family that
+            supports transfer operations, which is indicated using VK_QUEUE_TRANSFER_BIT. Any queue family with VK_QUEUE_GRAPHICS_BIT or
+            VK_QUEUE_COMPUTE_BIT capabilities already implicitly support VK_QUEUE_TRANSFER_BIT operations. The implementation is
+            not required to explicitly list it in queueFlags in those cases.
+        */
+        createBuffer(
+            totalBufferSize,
+            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            vertexIndexBuffer,
+            vertexIndexBufferMemory
+        );
+        /*
+            The vertexBuffer is now allocated from a memory type that is device local, which generally means that we are not able to use
+            vkMapMemory. However, we can copy data from the stagingBuffer to the vertexBuffer. We have to indicate that we intend to do that
+            by specifying the transfer source flag for the stagingBuffer and the transfer destination flag for the vertexBuffer, along with
+            the vertex buffer usage flag. Now we need to copy the contents from the staging buffer to the device local buffer:
+        */
+        copyBuffer(vertexStagingBuffer, vertexIndexBuffer, vertexBufferSize, 0);
+        //VkDeviceSize alignedSize = (vertexBufferSize + alignment - 1) & ~(alignment - 1); // not needed for this use case
+        copyBuffer(indexStagingBuffer, vertexIndexBuffer, indexBufferSize, vertexBufferSize);
+
+        indexBufferOffset = vertexBufferSize;
+
+        vkDestroyBuffer(device, vertexStagingBuffer, nullptr);
+        vkFreeMemory(device, vertexStagingBufferMemory, nullptr);
+        vkDestroyBuffer(device, indexStagingBuffer, nullptr);
+        vkFreeMemory(device, indexStagingBufferMemory, nullptr);
     }
 
     /*
@@ -1655,8 +1784,9 @@ private:
 
         /*
             If memory allocation was successful, then we can now associate this memory with the buffer.
-            The fourth parameter is the offset within the region of memory. Since this memory is allocated specifically for this the vertex
-            buffer, the offset is simply 0. If the offset is non-zero, then it is required to be divisible by memoryRequirements.alignment.
+            The fourth parameter is the offset within the region of memory. Since this memory is allocated 
+            specifically for this combined vertex + index buffer, the offset is simply 0. 
+            If the offset is non-zero, then it is required to be divisible by memoryRequirements.alignment.
         */
         vkBindBufferMemory(device, buffer, bufferMemory, 0);
     }
@@ -1666,7 +1796,7 @@ private:
         temporary command buffer. We may create a separate command pool for these kinds of short-lived buffers because the implementation
         may be able to apply memory allocation optimizations (use VK_COMMAND_POOL_CREATE_TRANSIENT_BIT flag during command pool generation).
     */
-    void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size)
+    void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size, VkDeviceSize offset)
     {
         VkCommandBuffer commandBuffer = beginOneTimeCommands();
 
@@ -1677,140 +1807,13 @@ private:
         */
         VkBufferCopy copyRegion{};
 
-        copyRegion.srcOffset = 0; // Optional
-        copyRegion.dstOffset = 0; // Optional
+        copyRegion.srcOffset = 0; // Assuming the source data starts at the beginning of srcBuffer
+        copyRegion.dstOffset = offset; // ensure the index buffer starts at the correct offset within the combined device local buffer
         copyRegion.size = size;
 
         vkCmdCopyBuffer(commandBuffer, srcBuffer, dstBuffer, 1, &copyRegion);
 
         endOneTimeCommands(commandBuffer);
-    }
-
-    /*
-        Buffers in Vulkan are regions of memory used for storing arbitrary data that can be read by the graphics card.
-        They can be used to store vertex data, but they can also be used for many other purposes.
-        Buffers do not automatically allocate memory for themselves, so we must take care of memory management.
-    */
-    void createVertexBuffer()
-    {
-        VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
-
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-
-        // VK_BUFFER_USAGE_TRANSFER_SRC_BIT: Buffer can be used as source in a memory transfer operation.
-        // VK_BUFFER_USAGE_TRANSFER_DST_BIT: Buffer can be used as destination in a memory transfer operation.
-        createBuffer(
-            bufferSize,
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            stagingBuffer,
-            stagingBufferMemory
-        );
-
-        void* data;
-        /*
-            Memory objects created with vkAllocateMemory are not directly host (CPU) accessible.
-            Memory objects created with the memory property VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT are considered mappable.
-            Memory objects must be mappable in order to be successfully mapped on the host.
-
-            Map the buffer memory into CPU accessible memory.
-            This function allows us to access a region of the specified memory resource defined by an offset and size.
-            The offset and size here are 0 and bufferInfo.size, respectively. It is also possible to specify the special
-            value VK_WHOLE_SIZE to map all of the memory. The second to last parameter can be used to specify flags,
-            but there aren’t any available yet in the current API. It must be set to the value 0.
-            The last parameter is the host virtual address pointer to a region of a mappable memory object.
-        */
-        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-        // Copy the vertex data to the buffer
-        memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
-        /*
-            Caching: Modern CPUs use caches to improve access times to frequently used data. When you write data to a memory location that is mapped to device memory (like GPU memory), the data might first be written to a cache in the CPU. Depending on the cache write policy (write-back vs. write-through), the data might not be immediately written back to the actual device memory. This caching can lead to a situation where the data appears to be written from the perspective of the CPU, but has not yet been physically transferred to the device memory.
-
-            Memory Coherency: Memory coherency refers to the consistency of data stored in different caches or memory locations. In the context of CPU and GPU operations, it's important that both processors view consistent states of memory. However, without explicit synchronization, the CPU's view of the memory (after writing data) might differ from the GPU's view (which reads the data for rendering or computation).
-
-            Vulkan provides explicit control over memory operations, including synchronization. When you map device memory using vkMapMemory, Vulkan offers no guarantees about the visibility of writes to this memory across different caches and memory systems.
-
-            Delayed Copies: Because of caching mechanisms, the CPU's writes to the mapped memory might not be immediately reflected in the device memory. This delay can be due to the write-back caching policy, where writes are accumulated in the cache and flushed to the main memory at a later time.
-
-            Visibility of Writes: Even after the data is eventually written to the device memory, there's no guarantee that the GPU will see the updated data immediately. This lack of visibility is due to the absence of memory barriers or explicit cache flushes/invalidation commands that ensure memory coherency between CPU and GPU operations.
-
-            To address these issues, Vulkan provides mechanisms to ensure data coherency:
-
-            Memory Barriers: Vulkan allows you to use memory barriers to synchronize access to resources and ensure that memory writes are visible across different stages of the pipeline. A memory barrier can be used after copying data to ensure that subsequent operations (like shader reads) see the updated data.
-
-            Flushes and Invalidations: For host-visible memory types that do not guarantee coherency (VK_MEMORY_PROPERTY_HOST_COHERENT_BIT not set), applications need to explicitly flush writes to or invalidate reads from the mapped memory regions using vkFlushMappedMemoryRanges and vkInvalidateMappedMemoryRanges, respectively.
-        */
-        vkUnmapMemory(device, stagingBufferMemory);
-        /*
-            Flushing memory ranges or using a coherent memory heap means that the driver will be aware of our writes to the buffer, but it
-            doesn’t mean that they are actually visible on the GPU yet. The transfer of data to the GPU is an operation that happens in the
-            background and the specification simply tells us that it is guaranteed to be complete as of the next call to vkQueueSubmit.
-        */
-
-        /*
-            The memory type that allows us to access the vertex buffer from the CPU may not be the most optimal memory type for the GPU
-            itself to read from. The most optimal memory has the VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT flag and is usually not accessible
-            by the CPU on dedicated graphics cards. We need to create two vertex buffers: One staging buffer in CPU accessible memory to
-            upload the data from the vertex array, and the final vertex buffer in GPU local memory. We then use a buffer copy command to
-            move the data from the staging buffer to the actual vertex buffer. The buffer copy command requires a queue family that
-            supports transfer operations, which is indicated using VK_QUEUE_TRANSFER_BIT. Any queue family with VK_QUEUE_GRAPHICS_BIT or
-            VK_QUEUE_COMPUTE_BIT capabilities already implicitly support VK_QUEUE_TRANSFER_BIT operations. The implementation is
-            not required to explicitly list it in queueFlags in those cases.
-        */
-        createBuffer(
-            bufferSize,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            vertexBuffer,
-            vertexBufferMemory
-        );
-        /*
-            The vertexBuffer is now allocated from a memory type that is device local, which generally means that we are not able to use
-            vkMapMemory. However, we can copy data from the stagingBuffer to the vertexBuffer. We have to indicate that we intend to do that
-            by specifying the transfer source flag for the stagingBuffer and the transfer destination flag for the vertexBuffer, along with
-            the vertex buffer usage flag. Now we need to copy the contents from the staging buffer to the device local buffer:
-        */
-        copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
-
-        vkDestroyBuffer(device, stagingBuffer, nullptr);
-        vkFreeMemory(device, stagingBufferMemory, nullptr);
-    }
-
-    void createIndexBuffer()
-    {
-        VkDeviceSize bufferSize = sizeof(indices[0]) * indices.size();
-
-        VkBuffer stagingBuffer;
-        VkDeviceMemory stagingBufferMemory;
-
-        createBuffer(
-            bufferSize,
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            stagingBuffer,
-            stagingBufferMemory
-        );
-
-        void* data;
-        vkMapMemory(device, stagingBufferMemory, 0, bufferSize, 0, &data);
-
-        memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
-
-        vkUnmapMemory(device, stagingBufferMemory);
-
-        createBuffer(
-            bufferSize,
-            VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
-            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-            indexBuffer,
-            indexBufferMemory
-        );
-
-        copyBuffer(stagingBuffer, indexBuffer, bufferSize);
-
-        vkDestroyBuffer(device, stagingBuffer, nullptr);
-        vkFreeMemory(device, stagingBufferMemory, nullptr);
     }
 
     void createImage(
@@ -3086,12 +3089,13 @@ private:
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
         // A graphics pipeline supports binding multiple buffers simultaneously (must match VkPipelineVertexInputStateCreateInfo)
-        VkBuffer vertexBuffers[] = { vertexBuffer };
+        VkBuffer vertexBuffers[] = { vertexIndexBuffer };
         VkDeviceSize offsets[] = { 0 };
 
         // binds buffers to a command buffer for use in subsequent drawing commands
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
-        vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32); // we can only have a single index buffer
+        // we can only have a single index buffer
+        vkCmdBindIndexBuffer(commandBuffer, vertexIndexBuffer, indexBufferOffset, VK_INDEX_TYPE_UINT32);
 
         /*
             Unlike vertex and index buffers, descriptor sets are not unique to graphics pipelines. Therefore, we need to specify if
@@ -3305,6 +3309,7 @@ private:
         createImageViews();
         createRenderPass();
         createDescriptorSetLayout();
+
         // requires descriptor set layout
         graphicsPipeline = new GraphicsPipeline 
         {
@@ -3315,6 +3320,7 @@ private:
             renderPass,
             device
         };
+
         createCommandPool();
         createColorResources(); // creates multisampled color buffer
         createDepthResources();
@@ -3322,9 +3328,11 @@ private:
         createTextureImage(); // requires command buffers
         createTextureImageView();
         createTextureSampler();
-        loadModel();
-        createVertexBuffer(); // requires the command pool due to the memory transfer command
-        createIndexBuffer();
+
+        loadModelCPU();
+        // requires the command pool due to the memory transfer commands
+        loadModelGPU();
+
         createUniformBuffers();
         createDescriptorPool();
         createDescriptorSets(); // requires descriptor set layout(s)
@@ -3506,10 +3514,8 @@ private:
         vkDestroyImage(device, textureImage, nullptr);
         vkFreeMemory(device, textureImageMemory, nullptr);
         // Memory that is bound to a buffer object may be freed once the buffer is no longer used.
-        vkDestroyBuffer(device, indexBuffer, nullptr);
-        vkFreeMemory(device, indexBufferMemory, nullptr);
-        vkDestroyBuffer(device, vertexBuffer, nullptr);
-        vkFreeMemory(device, vertexBufferMemory, nullptr);
+        vkDestroyBuffer(device, vertexIndexBuffer, nullptr);
+        vkFreeMemory(device, vertexIndexBufferMemory, nullptr);
 
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
         {
