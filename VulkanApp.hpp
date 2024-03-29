@@ -308,13 +308,12 @@ private:
     VkFormat swapChainImageFormat; // required for VkImageViewCreateInfo and VkAttachmentDescription
     VkExtent2D swapChainExtent; // required for VkViewport in the graphics pipeline
     VkRenderPass renderPass;
-
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices; // we will use more than 65,535 unique vertices
+    // Using a combined buffer with a single memory allocation improves cache utilization
     VkBuffer vertexIndexBuffer;
     VkDeviceMemory vertexIndexBufferMemory;
-    VkDeviceSize indexBufferOffset;
-
+    VkDeviceSize indexBufferOffset; // required for binding the buffer sub-range
     VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT; // multisample anti-aliasing to smooth out jagged edges
     VkImage colorImage; // stores the desired number of samples per pixel (multisampled image)
     VkDeviceMemory colorImageMemory;
