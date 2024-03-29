@@ -1537,21 +1537,21 @@ private:
     */
     void loadModelGPU()
     {
-        // create staging vertex buffer
-
         VkDeviceSize vertexBufferSize = sizeof(vertices[0]) * vertices.size();
+        VkDeviceSize indexBufferSize = sizeof(indices[0]) * indices.size();
+        VkDeviceSize totalBufferSize = vertexBufferSize + indexBufferSize;
 
-        VkBuffer vertexStagingBuffer;
-        VkDeviceMemory vertexStagingBufferMemory;
+        VkBuffer stagingBuffer;
+        VkDeviceMemory stagingBufferMemory;
 
         // VK_BUFFER_USAGE_TRANSFER_SRC_BIT: Buffer can be used as source in a memory transfer operation.
         // VK_BUFFER_USAGE_TRANSFER_DST_BIT: Buffer can be used as destination in a memory transfer operation.
         createBuffer(
-            vertexBufferSize,
+            totalBufferSize,
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            vertexStagingBuffer,
-            vertexStagingBufferMemory
+            stagingBuffer,
+            stagingBufferMemory
         );
 
         void* vertexData;
@@ -1567,9 +1567,18 @@ private:
             but there aren’t any available yet in the current API. It must be set to the value 0.
             The last parameter is the host virtual address pointer to a region of a mappable memory object.
         */
-        vkMapMemory(device, vertexStagingBufferMemory, 0, vertexBufferSize, 0, &vertexData);
+        vkMapMemory(device, stagingBufferMemory, 0, totalBufferSize, 0, &vertexData);
         // Copy the vertex data to the buffer
         memcpy(vertexData, vertices.data(), static_cast<size_t>(vertexBufferSize));
+        /*
+            Using offsets to reuse the already allocated and mapped staging buffer memory.
+            By using pointer arithmetic (static_cast<char*>(data) + vertexBufferSize), we correctly calculate the starting address 
+            for index data within the mapped memory. It's crucial to cast data to a char* (or uint8_t*) for this arithmetic because 
+            pointer arithmetic depends on the size of the pointed-to type, and char ensures byte-level calculation.
+        */
+        void* indexData = static_cast<char*>(vertexData) + vertexBufferSize;
+        // Start copying the index data at the offset pointer location
+        memcpy(indexData, indices.data(), static_cast<size_t>(indexBufferSize));
         /*
             Caching: Modern CPUs use caches to improve access times to frequently used data. When you write data to a memory location that is mapped to device memory (like GPU memory), the data might first be written to a cache in the CPU. Depending on the cache write policy (write-back vs. write-through), the data might not be immediately written back to the actual device memory. This caching can lead to a situation where the data appears to be written from the perspective of the CPU, but has not yet been physically transferred to the device memory.
 
@@ -1587,39 +1596,12 @@ private:
 
             Flushes and Invalidations: For host-visible memory types that do not guarantee coherency (VK_MEMORY_PROPERTY_HOST_COHERENT_BIT not set), applications need to explicitly flush writes to or invalidate reads from the mapped memory regions using vkFlushMappedMemoryRanges and vkInvalidateMappedMemoryRanges, respectively.
         */
-        vkUnmapMemory(device, vertexStagingBufferMemory);
+        vkUnmapMemory(device, stagingBufferMemory);
         /*
             Flushing memory ranges or using a coherent memory heap means that the driver will be aware of our writes to the buffer, but it
             doesn’t mean that they are actually visible on the GPU yet. The transfer of data to the GPU is an operation that happens in the
             background and the specification simply tells us that it is guaranteed to be complete as of the next call to vkQueueSubmit.
         */
-
-        // create staging index buffer
-
-        VkDeviceSize indexBufferSize = sizeof(indices[0]) * indices.size();
-
-        VkBuffer indexStagingBuffer;
-        VkDeviceMemory indexStagingBufferMemory;
-
-        createBuffer(
-            indexBufferSize,
-            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            indexStagingBuffer,
-            indexStagingBufferMemory
-        );
-
-        void* indexData;
-
-        vkMapMemory(device, indexStagingBufferMemory, 0, indexBufferSize, 0, &indexData);
-
-        memcpy(indexData, indices.data(), static_cast<size_t>(indexBufferSize));
-
-        vkUnmapMemory(device, indexStagingBufferMemory);
-
-        // two distinct staging buffers are ready for transfer [cmd] to a single device local memory
-
-        VkDeviceSize totalBufferSize = vertexBufferSize + indexBufferSize;
 
         /*
             The memory type that allows us to access the vertex buffer from the CPU may not be the most optimal memory type for the GPU
@@ -1644,16 +1626,12 @@ private:
             by specifying the transfer source flag for the stagingBuffer and the transfer destination flag for the vertexBuffer, along with
             the vertex buffer usage flag. Now we need to copy the contents from the staging buffer to the device local buffer:
         */
-        copyBuffer(vertexStagingBuffer, vertexIndexBuffer, vertexBufferSize, 0);
-        //VkDeviceSize alignedSize = (vertexBufferSize + alignment - 1) & ~(alignment - 1); // not needed for this use case
-        copyBuffer(indexStagingBuffer, vertexIndexBuffer, indexBufferSize, vertexBufferSize);
+        copyBuffer(stagingBuffer, vertexIndexBuffer, totalBufferSize, 0);
 
         indexBufferOffset = vertexBufferSize;
 
-        vkDestroyBuffer(device, vertexStagingBuffer, nullptr);
-        vkFreeMemory(device, vertexStagingBufferMemory, nullptr);
-        vkDestroyBuffer(device, indexStagingBuffer, nullptr);
-        vkFreeMemory(device, indexStagingBufferMemory, nullptr);
+        vkDestroyBuffer(device, stagingBuffer, nullptr);
+        vkFreeMemory(device, stagingBufferMemory, nullptr);
     }
 
     /*
