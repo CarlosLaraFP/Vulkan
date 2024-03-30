@@ -16,7 +16,6 @@ TODO next:
 * Post-processing effects
 * Shadow mapping
 * Enable best practice validation [layer]
-* Allocate multiple buffers from a single memory allocation
 * Dedicated memory operations queue with command pool
 * Implement push constants [to replace UBO approach]
 * Real-time offline on-device inference with rendered images via compute shader (MNIST or a canonical computer vision model)

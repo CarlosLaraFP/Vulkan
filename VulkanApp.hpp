@@ -330,8 +330,10 @@ private:
     std::vector<VkDeviceMemory> uniformBuffersMemory;
     std::vector<void*> uniformBuffersMapped;
     VkDescriptorPool descriptorPool;
-    std::vector<VkDescriptorSet> descriptorSets;
-    VkDescriptorSetLayout descriptorSetLayout;
+    std::vector<VkDescriptorSet> dynamicDescriptorSets; // 1 per frame
+    std::vector<VkDescriptorSet> staticDescriptorSets; // 1 per frame
+    VkDescriptorSetLayout dynamicDescriptorSetLayout;
+    VkDescriptorSetLayout staticDescriptorSetLayout;
     std::vector<VkFramebuffer> swapChainFramebuffers;
     VkCommandPool commandPool;
     std::vector<VkCommandBuffer> commandBuffers; // automatically freed when their command pool is destroyed
@@ -2631,7 +2633,7 @@ private:
         We have a descriptor for a uniform buffer (accessed by the vertex shader),
         and a descriptor for a combined image sampler (accessed by the fragment shader).
     */
-    void createDescriptorSetLayout()
+    void createDynamicDescriptorSetLayout()
     {
         VkDescriptorSetLayoutBinding uboLayoutBinding{};
         /*
@@ -2644,28 +2646,42 @@ private:
         uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT; // can be a combination of VkShaderStageFlagBits values
         uboLayoutBinding.pImmutableSamplers = nullptr; // only relevant for image sampling related descriptors
 
+        VkDescriptorSetLayoutCreateInfo layoutInfo{};
+
+        layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = &uboLayoutBinding;
+        // flags and pNext: not extending this structure
+
+        if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &dynamicDescriptorSetLayout) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create descriptor set layout.");
+        }
+    }
+
+    /*
+        We intend to use the combined image sampler descriptor in the fragment shader. That’s where the color of the
+        fragment is going to be determined. It is possible to use texture sampling in the vertex shader, for example
+        to dynamically deform a grid of vertices by a heightmap.
+    */
+    void createStaticDescriptorSetLayout()
+    {
         VkDescriptorSetLayoutBinding samplerLayoutBinding{};
-        /*
-            We intend to use the combined image sampler descriptor in the fragment shader. That’s where the color of the
-            fragment is going to be determined. It is possible to use texture sampling in the vertex shader, for example
-            to dynamically deform a grid of vertices by a heightmap.
-        */
-        samplerLayoutBinding.binding = 1;
+        
+        samplerLayoutBinding.binding = 0; // separate DescriptorSet for static resources
         samplerLayoutBinding.descriptorCount = 1;
         samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
         samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         samplerLayoutBinding.pImmutableSamplers = nullptr;
 
-        std::array<VkDescriptorSetLayoutBinding, 2> bindings = { uboLayoutBinding, samplerLayoutBinding };
-
         VkDescriptorSetLayoutCreateInfo layoutInfo{};
 
         layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
-        layoutInfo.pBindings = bindings.data();
+        layoutInfo.bindingCount = 1;
+        layoutInfo.pBindings = &samplerLayoutBinding;
         // flags and pNext: not extending this structure
 
-        if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS)
+        if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &staticDescriptorSetLayout) != VK_SUCCESS)
         {
             throw std::runtime_error("Failed to create descriptor set layout.");
         }
@@ -2702,7 +2718,8 @@ private:
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
         poolInfo.pPoolSizes = poolSizes.data(); // could be multiple sizes
-        poolInfo.maxSets = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT); // 1 descriptor set per frame
+        // 2 descriptor sets (1 dynamic, 1 static) per frame
+        poolInfo.maxSets = 2 * static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
 
         if (vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS)
         {
@@ -2717,24 +2734,43 @@ private:
     void createDescriptorSets()
     {
         /*
-            We create one descriptor set for each frame in flight, all with the same layout.
+            We create two descriptor sets for each frame in flight, each with its own layout.
             We need all the copies of the layout because the next function expects an array matching the number of sets.
         */
-        std::vector<VkDescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
+        std::vector<VkDescriptorSetLayout> dynamicLayouts(MAX_FRAMES_IN_FLIGHT, dynamicDescriptorSetLayout);
 
-        VkDescriptorSetAllocateInfo allocInfo{};
+        VkDescriptorSetAllocateInfo dynamicAllocInfo{};
 
-        allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        allocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
-        allocInfo.descriptorPool = descriptorPool;
-        allocInfo.pSetLayouts = layouts.data();
+        dynamicAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        dynamicAllocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        dynamicAllocInfo.descriptorPool = descriptorPool;
+        dynamicAllocInfo.pSetLayouts = dynamicLayouts.data();
 
-        descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+        dynamicDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
 
-        // The call to vkAllocateDescriptorSets will allocate descriptor sets, each with one uniform buffer descriptor.
-        if (vkAllocateDescriptorSets(device, &allocInfo, descriptorSets.data()) != VK_SUCCESS)
+        std::vector<VkDescriptorSetLayout> staticLayouts(MAX_FRAMES_IN_FLIGHT, staticDescriptorSetLayout);
+
+        VkDescriptorSetAllocateInfo staticAllocInfo{};
+
+        staticAllocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        staticAllocInfo.descriptorSetCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT);
+        staticAllocInfo.descriptorPool = descriptorPool;
+        staticAllocInfo.pSetLayouts = staticLayouts.data();
+
+        staticDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+
+        // The call to vkAllocateDescriptorSets will allocate a descriptor set per frame, 
+        // each with one uniform buffer descriptor and one combined image sampler descriptor
+        if (vkAllocateDescriptorSets(device, &dynamicAllocInfo, dynamicDescriptorSets.data()) != VK_SUCCESS)
         {
-            throw std::runtime_error("Failed to allocate descriptor sets.");
+            throw std::runtime_error("Failed to allocate dynamic descriptor sets.");
+        }
+
+        // The call to vkAllocateDescriptorSets will allocate a descriptor set per frame, 
+        // each with one uniform buffer descriptor and one combined image sampler descriptor
+        if (vkAllocateDescriptorSets(device, &staticAllocInfo, staticDescriptorSets.data()) != VK_SUCCESS)
+        {
+            throw std::runtime_error("Failed to allocate static descriptor sets.");
         }
 
         // The descriptor sets have been allocated, and now the descriptors within need to be configured:
@@ -2755,47 +2791,52 @@ private:
             imageInfo.sampler = textureSampler;
 
             // Describes how the descriptors will be updated / written to.
-            std::array<VkWriteDescriptorSet, 2> descriptorWrites{};
+
+            VkWriteDescriptorSet dynamicDescriptorWrite{};
 
             /*
                 The first two fields specify the descriptor set to update and the binding. We gave our uniform buffer binding index 0.
                 Descriptors can be arrays, so we also need to specify the first index in the array that we want to update.
                 We are not using an array, so the index is simply 0.
             */
-            descriptorWrites[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrites[0].dstSet = descriptorSets[i];
-            descriptorWrites[0].dstBinding = 0;
-            descriptorWrites[0].dstArrayElement = 0;
+            dynamicDescriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            dynamicDescriptorWrite.dstSet = dynamicDescriptorSets[i];
+            dynamicDescriptorWrite.dstBinding = 0;
+            dynamicDescriptorWrite.dstArrayElement = 0;
             /*
                 We need to specify the type of descriptor again. It’s possible to update multiple descriptors at once in an array,
                 starting at index dstArrayElement. The descriptorCount field specifies how many array elements we want to update.
             */
-            descriptorWrites[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-            descriptorWrites[0].descriptorCount = 1;
+            dynamicDescriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+            dynamicDescriptorWrite.descriptorCount = 1;
             /*
                 The last field (1/3) references an array with descriptorCount structs that actually configure the descriptors. It depends
                 on the type of descriptor which one of the three you actually need to use. The pBufferInfo field is used for descriptors
                 that refer to buffer data, pImageInfo is used for descriptors that refer to image data, and pTexelBufferView is used for
                 descriptors that refer to buffer views. Our descriptor is based on buffers, so we are using pBufferInfo.
             */
-            descriptorWrites[0].pBufferInfo = &bufferInfo;
-            descriptorWrites[0].pImageInfo = nullptr; // Optional
-            descriptorWrites[0].pTexelBufferView = nullptr; // Optional
+            dynamicDescriptorWrite.pBufferInfo = &bufferInfo;
+            dynamicDescriptorWrite.pImageInfo = nullptr; // Optional
+            dynamicDescriptorWrite.pTexelBufferView = nullptr; // Optional
 
-            descriptorWrites[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-            descriptorWrites[1].dstSet = descriptorSets[i];
-            descriptorWrites[1].dstBinding = 1;
-            descriptorWrites[1].dstArrayElement = 0;
-            descriptorWrites[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-            descriptorWrites[1].descriptorCount = 1;
-            descriptorWrites[1].pImageInfo = &imageInfo;
-            descriptorWrites[1].pBufferInfo = nullptr; // Optional
-            descriptorWrites[1].pTexelBufferView = nullptr; // Optional
+            VkWriteDescriptorSet staticDescriptorWrite{};
+
+            staticDescriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            staticDescriptorWrite.dstSet = staticDescriptorSets[i];
+            staticDescriptorWrite.dstBinding = 0;
+            staticDescriptorWrite.dstArrayElement = 0;
+            staticDescriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            staticDescriptorWrite.descriptorCount = 1;
+            staticDescriptorWrite.pImageInfo = &imageInfo;
+            staticDescriptorWrite.pBufferInfo = nullptr; // Optional
+            staticDescriptorWrite.pTexelBufferView = nullptr; // Optional
+
+            std::array< VkWriteDescriptorSet, 2> descriptorWrites = { dynamicDescriptorWrite, staticDescriptorWrite };
 
             /*
                 The updates are applied using vkUpdateDescriptorSets. It accepts two kinds of arrays as parameters:
                 an array of VkWriteDescriptorSet and an array of VkCopyDescriptorSet.
-                The latter can be used to copy descriptors to each other, as its name implies.
+                The latter can be used to copy descriptors to each other.
             */
             vkUpdateDescriptorSets(device, static_cast<uint32_t>(descriptorWrites.size()), descriptorWrites.data(), 0, nullptr);
         }
@@ -3086,7 +3127,16 @@ private:
             VK_PIPELINE_BIND_POINT_GRAPHICS, 
             graphicsPipeline->getPipelineLayout(), 
             0, 1, 
-            &descriptorSets[currentFrame], 
+            &dynamicDescriptorSets[currentFrame], 
+            0, nullptr
+        );
+
+        vkCmdBindDescriptorSets(
+            commandBuffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            graphicsPipeline->getPipelineLayout(),
+            1, 1,
+            &staticDescriptorSets[currentFrame],
             0, nullptr
         );
 
@@ -3285,7 +3335,8 @@ private:
         createSwapChain();
         createImageViews();
         createRenderPass();
-        createDescriptorSetLayout();
+        createDynamicDescriptorSetLayout();
+        createStaticDescriptorSetLayout();
 
         // requires descriptor set layout
         graphicsPipeline = new GraphicsPipeline 
@@ -3293,7 +3344,7 @@ private:
             "shaders/vert.spv",
             "shaders/frag.spv",
             msaaSamples,
-            descriptorSetLayout,
+            { dynamicDescriptorSetLayout, staticDescriptorSetLayout },
             renderPass,
             device
         };
@@ -3501,7 +3552,8 @@ private:
         }
 
         vkDestroyDescriptorPool(device, descriptorPool, nullptr); // automatically frees descriptor sets
-        vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
+        vkDestroyDescriptorSetLayout(device, dynamicDescriptorSetLayout, nullptr);
+        vkDestroyDescriptorSetLayout(device, staticDescriptorSetLayout, nullptr);
 
         delete graphicsPipeline;
 

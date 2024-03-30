@@ -12,7 +12,7 @@ public:
 		const std::string& vertexShaderPath, 
 		const std::string& fragmentShaderPath,
 		VkSampleCountFlagBits msaaSamples,
-		const VkDescriptorSetLayout& descriptorLayout,
+		const std::vector<VkDescriptorSetLayout>& descriptorLayouts,
 		const VkRenderPass& renderPass,
 		const VkDevice& logicalDevice
 	);
@@ -22,7 +22,7 @@ public:
 
 private:
 	const VkDevice& m_LogicalDevice;
-	const VkDescriptorSetLayout& m_DescriptorSetLayout;
+	std::vector<VkDescriptorSetLayout> m_DescriptorSetLayouts;
 	const VkRenderPass& m_RenderPass;
 	VkSampleCountFlagBits m_Samples;
 	VkPipelineLayout m_PipelineLayout = nullptr;
